@@ -63,6 +63,7 @@ import {
   compensatedResidual,
   findMovingBlobs,
   maskBelowHorizon,
+  maskBelowSkyline,
 } from "./vision/motion.js";
 import { lockVelTolerance, TrackTable, type WorldObs } from "./vision/tracks.js";
 import type { Recorder } from "./record.js";
@@ -92,10 +93,11 @@ const LM_MIN_SUN_EL = 8;
 const LM_AZIMUTHS = [15, 60, 105, 150, 195, 240, 285, 330];
 /** Vision bias-correction clamp, deg. The estimator measures an exogenous
  *  ADS-B-vs-mount offset directly (no plant feedback), so it cannot wind up;
- *  the clamp only bounds the damage of a wrong lock. A stale mount model
- *  (re-placed base) needs ~10° of authority or the plane rides the frame
- *  edge until auto-calibration catches up. */
-const CORR_MAX_DEG = 12;
+ *  the clamp only bounds the damage of a wrong lock. It was 12° so a stale
+ *  mount model (re-placed base) could still be followed; landmark re-cal
+ *  now fixes that case, and 12° let a roofline lock drag the aim 12° down
+ *  into the houses (SKW6277). Real ADS-B/mount bias here is < 1.5°. */
+const CORR_MAX_DEG = 3;
 /** Auto-calibration samples are only harvested below this aim slew rate. */
 const AUTOCAL_MAX_AIM_RATE_DPS = 2;
 /** The continuous-sweep floor applies only inside this pose error, deg. */
@@ -1051,11 +1053,20 @@ export class ControlLoop {
             // Once the head has settled on the ADS-B aim (pointing is good
             // to ~1° after autocal), start at a rung sized to the plane;
             // if nothing shows within 8 s, fall back to wide.
+            // Sized so the plane spans ~20 vision px (HFOV ≈ 24 × its angular
+            // size, never under 6°: pointing is good to ~0.5° now). A fixed
+            // 13.5° rung left a 0.3° plane at 10 px — the ~11,000 ft overhead
+            // arrivals locked 9-21% of the time inbound. Unseen after 8 s:
+            // one rung wider; after 16 s: wide.
             const settled = now - since > 1500 && lagDeg < 2;
             const ang = zoom.angularSizeDeg ?? 1;
-            const startRung = ang < 0.5 ? 3 : ang < 1.0 ? 2 : 0;
-            if (now - since >= 8000) this.ladderIdx = 0;
-            else if (settled && startRung > this.ladderIdx) {
+            const acqHfov = clamp(24 * ang, 6, wideHfov);
+            const sizedRung = Math.max(0, Math.floor(Math.log(acqHfov / wideHfov) / Math.log(RUNG)));
+            const startRung = now - since >= 16_000 ? 0 : now - since >= 8000 ? Math.max(0, sizedRung - 1) : sizedRung;
+            if (now - since >= 8000 && this.ladderIdx > startRung) {
+              this.ladderIdx = startRung;
+              this.lastLadderAt = now;
+            } else if (settled && startRung > this.ladderIdx) {
               this.ladderIdx = startRung;
               this.lastLadderAt = now;
             }
@@ -1817,6 +1828,11 @@ export class ControlLoop {
         // The plane is always above the horizon; drop the ground (known from
         // tilt) so rooftops/poles/trees never become false movers.
         maskBelowHorizon(resid, VISION_W, VISION_H, aim.elDeg, vfov, 2);
+        if (cfg.limits.horizon?.length) {
+          const hz = cfg.limits.horizon;
+          maskBelowSkyline(resid, VISION_W, VISION_H, aim.azDeg, aim.elDeg, hfov, vfov,
+            (az) => horizonMinEl(hz, az, -90), sign);
+        }
         const rawBlobs = findMovingBlobs(resid, VISION_W, VISION_H, 5, {
           expectedX: exX,
           expectedY: exY,
