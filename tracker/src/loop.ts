@@ -92,9 +92,10 @@ const LM_MIN_SUN_EL = 8;
  *  in the upper half of a wide frame. */
 const LM_AZIMUTHS = [15, 60, 105, 150, 195, 240, 285, 330];
 /** Drift fold-in from per-pass vision bias (foldPassBias). */
-const BIAS_FOLD_PASSES = 4;
+const BIAS_FOLD_PASSES = 3;
 const BIAS_FOLD_MIN_DEG = 0.6;
 const BIAS_FOLD_MAX_SPREAD = 0.8;
+const BIAS_FOLD_GAIN = 0.5;
 /** Vision bias-correction clamp, deg. The estimator measures an exogenous
  *  ADS-B-vs-mount offset directly (no plant feedback), so it cannot wind up;
  *  the clamp only bounds the damage of a wrong lock. It was 12° so a stale
@@ -746,8 +747,11 @@ export class ControlLoop {
       const spread = Math.max(...vals) - Math.min(...vals);
       return Math.abs(m) >= BIAS_FOLD_MIN_DEG && sameSign && spread <= BIAS_FOLD_MAX_SPREAD ? m : 0;
     };
-    const dAz = fold(last.map((h) => h.az));
-    const dEl = fold(last.map((h) => h.el));
+    // Damped: the bias responded ~2x to each fold on 2026-10-11 (−1.64° moved
+    // it −3.3°, +1.52° moved it +2.5°), so full folds oscillated. Half a
+    // fold converges whether the true gain is 1 or 2.
+    const dAz = BIAS_FOLD_GAIN * fold(last.map((h) => h.az));
+    const dEl = BIAS_FOLD_GAIN * fold(last.map((h) => h.el));
     if (dAz === 0 && dEl === 0) return;
     const m = cfg.mount;
     const next = { ...m, panOffsetDeg: m.panOffsetDeg - dAz, tiltOffsetDeg: m.tiltOffsetDeg - dEl };
