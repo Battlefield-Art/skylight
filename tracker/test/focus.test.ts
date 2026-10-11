@@ -58,3 +58,20 @@ describe("FocusController", () => {
     expect(f.update({ ...base, now: 4000, edgePx: 7 })).toEqual([]); // cooldown
   });
 });
+
+describe("FocusController gating", () => {
+  it("nudges a detected-but-off-centre soft plane; sweeps an undetectably soft one", () => {
+    const f = new FocusController();
+    // off-centre (not locked) but detected and soft at a learned zoom
+    const arrive = f.update({ ...base, zoomUnits: 1437, locked: false, detected: true, edgePx: 6, focusUnits: -3700 });
+    expect(arrive).toContainEqual({ kind: "nudge", deltaUnits: -170, target: -3870 });
+    // still soft after the cooldown (the nudge fell short): nudge again
+    const a = f.update({ ...base, now: 2000, zoomUnits: 1437, locked: false, detected: true, edgePx: 6, focusUnits: -3750 });
+    expect(a).toEqual([{ kind: "nudge", deltaUnits: -120, target: -3870 }]);
+    // arrival far off with the plane too soft to detect: sweep on the prediction
+    const g = new FocusController();
+    g.update({ ...base, zoomUnits: 1437, zoomSettled: false, locked: false, focusUnits: -3200 });
+    const b = g.update({ ...base, now: 500, zoomUnits: 1437, locked: false, detected: false, sweepOk: true, focusUnits: -3200 });
+    expect(b).toContainEqual({ kind: "onePush" });
+  });
+});

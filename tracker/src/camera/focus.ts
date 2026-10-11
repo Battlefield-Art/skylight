@@ -58,8 +58,14 @@ export interface FocusInput {
   zoomUnits: number;
   /** The zoom ladder isn't stepping (the lens is at its final zoom). */
   zoomSettled: boolean;
-  /** Fresh, centred, steady lock on the plane. */
+  /** Fresh, centred, steady lock on the plane (gates learning). */
   locked: boolean;
+  /** The plane is detected at all (gates soft-correction nudges). */
+  detected?: boolean;
+  /** Camera steady and the plane centred or, when not detected (too soft
+   *  to see), the aim settled on the prediction — the camera's centre-
+   *  weighted one-push AF will find it (gates sweeps). */
+  sweepOk?: boolean;
   /** Latest sharpness measurement on the plane, if fresh. */
   edgePx: number | null;
   /** Its contrast (luma p98−p2). */
@@ -137,7 +143,7 @@ export class FocusController {
     if (!i.zoomSettled || i.now - this.lastActionAt < ACTION_COOLDOWN_MS) return out;
 
     const off = target != null && i.focusUnits != null ? target - i.focusUnits : null;
-    const canSweep = i.locked && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+    const canSweep = (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
     // Arriving at a zoom we know: go straight to the learned point.
     if (justSettled && off != null && Math.abs(off) > 2 * NUDGE_MIN_UNITS) {
       this.lastActionAt = i.now;
@@ -148,7 +154,7 @@ export class FocusController {
       return out;
     }
     // Soft on the plane for a moment: correct.
-    if (i.locked && this.softSince != null && i.now - this.softSince >= SOFT_HOLD_MS) {
+    if ((i.detected ?? i.locked) && this.softSince != null && i.now - this.softSince >= SOFT_HOLD_MS) {
       if (off != null && Math.abs(off) > NUDGE_MIN_UNITS && !(Math.abs(off) > ONEPUSH_ABOVE_UNITS && canSweep)) {
         this.lastActionAt = i.now;
         this.softSince = null;

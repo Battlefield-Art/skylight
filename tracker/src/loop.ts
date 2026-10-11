@@ -1225,6 +1225,8 @@ export class ControlLoop {
         zoomUnits: lensZoom,
         zoomSettled: fZoomSettled,
         locked: visionLocked && fCentered && fSteady,
+        detected: fFresh,
+        sweepOk: fSteady && (fCentered || !fFresh),
         edgePx: fm && now - fm.t < 700 ? fm.edgePx : null,
         edgeContrast: fm?.contrast ?? null,
         focusUnits: d.getFocusUnits?.() ?? null,

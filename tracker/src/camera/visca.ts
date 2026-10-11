@@ -438,7 +438,12 @@ export class ViscaCamera implements CameraDriver {
    *  height at 4° HFOV. The stepper below takes exactly one detent per
    *  pulse, only in the direction the plane needs. */
   static readonly TILT_DETENT_DEG = 0.33;
-  private static readonly TILT_PULSE_MS = 90;
+  /** 120 ms at speed 2 moved exactly one detent in every probe trial; 40-80 ms
+   *  sometimes moved nothing (and the stall let a climbing plane out of frame). */
+  private static readonly TILT_PULSE_MS = 120;
+  /** Above this the stepper's ~3 pulses/s cadence can't keep up (ASA1403
+   *  climbing at 0.9°/s: tilt froze 0.8 s, lag 1.2°, plane left the frame). */
+  private static readonly STEPPER_MAX_DPS = 0.45;
   /** Zoom from which the stepper replaces dithering (detent vs frame). */
   private static readonly STEPPER_MIN_ZOOM = 900;
   private tiltStepper = { acc: 0, until: 0, dir: 0, lastAt: 0, active: false };
@@ -460,7 +465,9 @@ export class ViscaCamera implements CameraDriver {
     const dt = st.lastAt ? Math.min(0.2, (now - st.lastAt) / 1000) : 0;
     st.lastAt = now;
     const slowest = table[0][1];
-    const engaged = zoom >= ViscaCamera.STEPPER_MIN_ZOOM && Math.abs(want) < 0.8 * slowest;
+    const engaged =
+      zoom >= ViscaCamera.STEPPER_MIN_ZOOM &&
+      Math.abs(want) < Math.min(0.8 * slowest, ViscaCamera.STEPPER_MAX_DPS);
     if (!engaged) {
       st.active = false;
       st.acc = 0;
