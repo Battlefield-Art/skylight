@@ -187,9 +187,15 @@ export function speedTableAt(
 
 /** Sentinel for "axis not driven" — distinct from speed byte 0, a real gear. */
 const STOP_STEP = -1;
-/** Absolute moves always run flat out (pan 0x18 / tilt 0x14, the maxima). */
+/** Absolute moves run flat out (pan 0x18 / tilt 0x14, the maxima)... */
 const ABS_PAN_SPEED = 0x18;
 const ABS_TILT_SPEED = 0x14;
+/** ...except LONG pan slews (dead-zone wraps, big re-targets): the pan
+ *  pointing jumped ~+2° across a wrap pass (SWA2306, 2026-10-11; landmark
+ *  checks saw −2.0/+1.0° jumps that afternoon) — the motor missing steps
+ *  while flinging the head through ~300°. */
+const ABS_PAN_SPEED_LONG = 0x12;
+const LONG_PAN_MOVE_DEG = 120;
 
 /** Sustained deg/s of a discrete speed step (nearest table entry). */
 function stepRate(table: [number, number][], step: number): number {
@@ -799,9 +805,10 @@ export class ViscaCamera implements CameraDriver {
     if (moved) {
       const p = nibbles(panDegToUnits(w.panDeg, this.o.units), 4);
       const t = nibbles(tiltDegToUnits(w.tiltDeg, this.o.units), 4);
+      const longMove = this.pose != null && Math.abs(w.panDeg - this.pose.panDeg) > LONG_PAN_MOVE_DEG;
       this.sendCommand([
         0x81, 0x01, 0x06, 0x02,
-        ABS_PAN_SPEED, ABS_TILT_SPEED,
+        longMove ? ABS_PAN_SPEED_LONG : ABS_PAN_SPEED, ABS_TILT_SPEED,
         ...p, ...t, 0xff,
       ]);
       this.lastSent = { panDeg: w.panDeg, tiltDeg: w.tiltDeg };
@@ -810,7 +817,7 @@ export class ViscaCamera implements CameraDriver {
       // the gate's hard expiry even if no position reply ever lands.
       const travelSec = this.pose
         ? Math.max(
-            Math.abs(w.panDeg - this.pose.panDeg) / this.o.limits.panSpeedMaxDps,
+            Math.abs(w.panDeg - this.pose.panDeg) / (this.o.limits.panSpeedMaxDps * (longMove ? 0.6 : 1)),
             Math.abs(w.tiltDeg - this.pose.tiltDeg) / this.o.limits.tiltSpeedMaxDps,
           )
         : 3;
