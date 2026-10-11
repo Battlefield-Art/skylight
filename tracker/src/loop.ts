@@ -55,6 +55,8 @@ import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom } from "./pointing/zoom.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
 import { silhouetteCentroid } from "./vision/silhouette.js";
+import { measureSharpness } from "./vision/sharpness.js";
+import sharp from "sharp";
 import {
   estimateShift,
   compensatedResidual,
@@ -253,6 +255,10 @@ export class ControlLoop {
   private lmApplies = 0;
   /** Frames already shot by an interrupted check — a busy sky rarely
    *  leaves 40 idle seconds, so the next idle gap carries on from here. */
+  /** Focus quality on the locked plane (vision/sharpness.ts), ≤3 Hz. */
+  private focusMetric: { edgePx: number; contrast: number; t: number } | null = null;
+  private lastSharpAt = 0;
+  private frameDims: { w: number; h: number } | null = null;
   private lmPartial: { startedAt: number; refsAt: number | null; imgs: (Float64Array | null)[] } | null = null;
   private lmStatus: {
     lastCheckAt: number | null;
@@ -1702,6 +1708,9 @@ export class ControlLoop {
           };
         }),
         autoCal: cfg.vision.autoCalibrate ? this.autoCal.status(cfg.mount) : undefined,
+        focus: this.focusMetric
+          ? { edgePx: this.focusMetric.edgePx, contrast: this.focusMetric.contrast, ageMs: now - this.focusMetric.t }
+          : null,
         landmarks: {
           refs: this.landmarks.set?.refs.length ?? 0,
           capturedAt: this.landmarks.set?.capturedAt ?? null,
@@ -2001,6 +2010,25 @@ export class ControlLoop {
         }
         // Feed the live plane position to the recorder (for offline stabilization).
         this.videoRecNote(o.cx, o.cy, frameT);
+
+        // Focus quality on the plane, while zoomed in (wide frames put the
+        // plane at a few pixels — nothing to measure).
+        if (hfovF < 20 && now - this.lastSharpAt > 330) {
+          this.lastSharpAt = now;
+          try {
+            if (!this.frameDims) {
+              const m = await sharp(frame).metadata();
+              if (m.width && m.height) this.frameDims = { w: m.width, h: m.height };
+            }
+            const box = this.lastDetection?.box;
+            if (this.frameDims && box) {
+              const fm = await measureSharpness(frame, box, this.frameDims.w, this.frameDims.h);
+              if (fm) this.focusMetric = { ...fm, t: now };
+            }
+          } catch {
+            /* a bad frame — skip */
+          }
+        }
 
         const steady = aimRateDps < 8 && elF < 75;
         // The lock IS the temporal confirmation now: a track only becomes

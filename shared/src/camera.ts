@@ -200,6 +200,9 @@ export interface VisionState {
     spanAzDeg: number;
     spanElDeg: number;
   };
+  /** Focus quality on the locked plane: edge width in full-res px (≈2-3
+   *  sharp at stream resolution; defocus grows it). */
+  focus?: { edgePx: number; contrast: number; ageMs: number } | null;
   /** Landmark (skyline) re-calibration: catches a moved/re-placed base. */
   landmarks?: {
     refs: number;
