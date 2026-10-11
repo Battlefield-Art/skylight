@@ -78,7 +78,7 @@ const FOCUS_LUT_FILE = resolve(TRACKER_DIR, "../data/focus-lut.json");
  *  usually followed by a restart), then daily; retries after a failed or
  *  aborted check. */
 const LM_FIRST_DELAY_MS = 60_000;
-const LM_PERIOD_MS = 24 * 3600_000;
+const LM_PERIOD_MS = 20 * 60_000;
 const LM_RETRY_MS = 15 * 60_000;
 /** After an interruption: resume at the next idle gap, keeping the frames
  *  already shot while they are this fresh. */
@@ -258,8 +258,6 @@ export class ControlLoop {
   private lmRunning = false;
   private lmAbort = false;
   private lmNextAt = Date.now() + LM_FIRST_DELAY_MS;
-  /** Consecutive "shifted" applies without an "unchanged" confirmation. */
-  private lmApplies = 0;
   /** Frames already shot by an interrupted check — a busy sky rarely
    *  leaves 40 idle seconds, so the next idle gap carries on from here. */
   /** Focus quality on the locked plane (vision/sharpness.ts), ≤3 Hz. */
@@ -672,24 +670,27 @@ export class ControlLoop {
           ("medDxDeg" in verdict ? ` shift ${verdict.medDxDeg.toFixed(2)}°/${verdict.medDyDeg.toFixed(2)}°` : ""),
       );
 
-      if (verdict.kind === "shifted" && this.lmApplies < 3) {
-        this.lmApplies++;
+      if (verdict.kind === "shifted") {
+        this.autoCal.shiftSamples(
+          verdict.model.panOffsetDeg - cfg.mount.panOffsetDeg,
+          verdict.model.tiltOffsetDeg - cfg.mount.tiltOffsetDeg,
+          cfg.mount.panGain, cfg.mount.tiltGain, now,
+        );
         this.upstream.patchConfig({ tracker: { mount: verdict.model } } as Partial<Config>);
+        // Re-shoot the references at once (same frames, new model) so the
+        // next check measures only drift from here.
+        this.landmarks.save(capture(verdict.model));
         this.corrAz = 0;
         this.corrAzX = 0;
         this.corrEl = 0;
         this.corrAzApp = 0;
         this.corrElApp = 0;
-        // Pre-move plane samples would drag the model back.
-        this.autoCal.reset(now);
         this.lmStatus.lastAppliedAt = now;
         this.recorder.write("landmarksApplied", { model: verdict.model, rmsDeg: verdict.rmsDeg });
-        // Confirm shortly: the re-check should come back "unchanged".
-        this.lmNextAt = now + 2 * 60_000;
+        this.lmNextAt = now + LM_PERIOD_MS;
         return;
       }
       if (verdict.kind === "unchanged") {
-        this.lmApplies = 0;
         // Follow the auto-cal: references re-shot under a model the planes
         // have refined since are better truth than the old ones.
         const acAt = this.autoCal.status(cfg.mount).lastAppliedAt;
@@ -697,7 +698,7 @@ export class ControlLoop {
         this.lmNextAt = now + LM_PERIOD_MS;
         return;
       }
-      this.lmNextAt = now + (verdict.kind === "shifted" ? LM_PERIOD_MS : LM_RETRY_MS);
+      this.lmNextAt = now + LM_RETRY_MS; // insufficient / inconsistent (haze, glare, busy sky)
     } catch (e) {
       console.warn("[tracker] landmark check failed:", e);
       this.lmNextAt = startedAt + LM_RETRY_MS;

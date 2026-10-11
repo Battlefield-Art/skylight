@@ -48,13 +48,14 @@ export interface RefShift {
 
 /** Minimum correlation sharpness to trust a reference (survey: 10-130). */
 export const LM_MIN_PEAK = 8;
-/** Shifts below this are "unchanged": small drift is the plane-based
- *  auto-cal's job (it measures against aircraft truth; the references only
- *  know the model they were shot under). Landmarks step in for remount-class
- *  moves, which push planes outside the vision lock gate so auto-cal never
- *  sees them. (At 0.3° the two fought: a 0.4° landmark "shift" re-solved
- *  from the references' model undid a 2.4° auto-cal correction, twice.) */
-export const LM_APPLY_MIN_DEG = 1.5;
+/** Physical shifts below this are "unchanged". Above it the shift is applied
+ *  as a DELTA on the current model, the references are re-shot (so the next
+ *  check measures only new drift) and auto-cal's samples are shifted by the
+ *  same delta — so the two never fight: landmarks track physical drift
+ *  (~1°/h observed on 2026-10-11), auto-cal keeps the absolute calibration.
+ *  (The earlier fight came from solving from the references' model and not
+ *  re-shooting them.) */
+export const LM_APPLY_MIN_DEG = 0.25;
 /** Refs must agree with their median within this to count as consistent. */
 export const LM_AGREE_DEG = 0.6;
 export const LM_MIN_GOOD = 4;
