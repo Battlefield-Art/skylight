@@ -145,15 +145,15 @@ Public (GET, CORS for https://skylightceiling.com, http://localhost:3000 and `*`
   least this tight), `minDur`, `maxDur`, `zenith` (0|1), `wrap` (0|1), `build` (build_version
   or build_label exact), `hasClip` (0|1).
   `minQuality`, `flagged` (schema 1.1), `minAspect`, `maxAspect`, `minTurn`, `maxTurn`,
-  `turnDir` (left|right), `departure` (0|1) (schema 1.2).
-  Sortable: `started_at duration_sec max_el hfov_min lock_pct center_med_az center_med_el pose_err_med tele_az_sd tele_el_sd quality aspect turn_deg`.
+  `turnDir` (left|right), `departure` (0|1) (schema 1.2), `minAlt`, `maxAlt` (ft at closest approach).
+  Sortable: `started_at duration_sec max_el hfov_min lock_pct center_med_az center_med_el pose_err_med tele_az_sd tele_el_sd quality aspect turn_deg alt_ca`.
 - `GET /api/passes/<id>` → `PassRow & { meta: PassJson }`.
 - `GET /api/facets` → `{ count, dateMin, dateMax, airlines:[{v,n}], types:[{v,n,name}], origins:[{v,n,name}], dests:[{v,n,name}], builds:[{v,label,n}] }`.
 - `GET /media/<id>/<name>` → the blob (Range, ETag, `cache-control: public, max-age=31536000, immutable`).
 - `GET /health` → `{ ok, passes }`.
 
 `PassRow` (D1 columns, snake_case; the API returns them as-is):
-`id started_at ended_at duration_sec hex flight registration type_code type_name airline origin origin_name destination dest_name max_el min_slant_m az_start az_end zenith wrap lock_pct first_lock_sec center_med_az center_med_el center_p90_az center_p90_el hfov_min sec_to_hfov_min tele_sec tele_az_sd tele_el_sd pan_reversals pan_hop tilt_hop pose_err_med corr_max zoom_changes build_version build_label clip_bytes quality flagged flags best_frame_sec heading_ca aspect turn_deg turn_dir departure has_clip created_at`
+`id started_at ended_at duration_sec hex flight registration type_code type_name airline origin origin_name destination dest_name max_el min_slant_m az_start az_end zenith wrap lock_pct first_lock_sec center_med_az center_med_el center_p90_az center_p90_el hfov_min sec_to_hfov_min tele_sec tele_az_sd tele_el_sd pan_reversals pan_hop tilt_hop pose_err_med corr_max zoom_changes build_version build_label clip_bytes quality flagged flags best_frame_sec heading_ca aspect turn_deg turn_dir departure alt_ca has_clip created_at`
 (`started_at/ended_at/created_at` ISO-8601 UTC strings; booleans as 0/1.)
 
 ## Secrets and environment
@@ -283,3 +283,19 @@ backfill `passes/tools/geometry-backfill.ts`):
 - Backfill: track per series row = the latest recorder `snapshot` (~2 Hz) at or
   before it, from `~/skylight/tracker/data/sessions/*.jsonl` on the Pi; passes
   outside any session get the ground track of the predicted position (az/el/slant).
+
+## Altitude (2026-10-11)
+
+Owner wanted to find the high overflights (10k ft+), not just climb-outs.
+No pass.json change: `pass.altFtAtCa` (ADS-B baro altitude at closest approach,
+ft) was always there.
+
+Worker: column `alt_ca REAL` (+ index `passes_alt_ca`), NULL when pass.json has
+no altitude; filters `minAlt`, `maxAlt` (ft; passes without altitude never
+match); sortable `alt_ca` (NULLs last). `PassRow` gains `alt_ca` (after
+`departure`). Existing rows were backfilled in SQL from `meta`
+(`UPDATE passes SET alt_ca = json_extract(meta, '$.pass.altFtAtCa')`, numeric
+values only): 365 of 422 rows had an altitude.
+
+Site: sort "Highest" = `sort=alt_ca&dir=desc`; preset "High altitude" =
+`minAlt=8000&sort=alt_ca&dir=desc`; list cards show the altitude.
