@@ -16,7 +16,7 @@ describe("FocusController", () => {
     expect(f.learned(1437)).toBe(-3870);
     expect(f.learned(1404)).toBeNull();
     const g = new FocusController(null, false);
-    g.update({ ...base, zoomUnits: 1404, edgePx: 2.2, focusUnits: -2187 });
+    run(g, { ...base, zoomUnits: 1404, edgePx: 2.2, focusUnits: -2187 }, 0, 1200);
     expect(g.learned(1404)).toBe(-2187);
     expect(g.learned(1437)).toBeNull();
   });
@@ -37,15 +37,19 @@ describe("FocusController", () => {
 
   it("learns sharp positions and nudges straight there when soft", () => {
     const f = new FocusController();
-    f.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 }); // learn
+    // a moving lens teaches nothing; a still one does
+    f.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3000 });
+    f.update({ ...base, now: 200, edgePx: 2.4, focusUnits: -3500 });
+    expect(f.learned(1200)).toBeNull();
+    run(f, { ...base, edgePx: 2.4, focusUnits: -3870 }, 400, 1600); // learn
     expect(f.learned(1200)).toBe(-3870);
     // later the focus drifted and the plane is soft
     // later the lens is 270 off: the servo bursts straight toward it
-    const acts = f.update({ ...base, now: 5000, edgePx: 8, focusUnits: -3600 });
+    const acts = f.update({ ...base, now: 5000, targetPx: 30, edgePx: 8, focusUnits: -3600 });
     expect(acts).toEqual([{ kind: "nudge", deltaUnits: -60, target: -3870 }]);
     // far off, locked, lens settled: a one-push sweep beats a 10 s drive
     const g = new FocusController(null, false);
-    g.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 });
+    run(g, { ...base, edgePx: 2.4, focusUnits: -3870 }, 0, 1200);
     const b = run(g, { ...base, edgePx: 8, focusUnits: -2900 }, 9000, 11000);
     expect(b).toContainEqual({ kind: "onePush" });
   });

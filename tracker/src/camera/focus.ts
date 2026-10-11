@@ -189,11 +189,6 @@ export class FocusController {
     const sharp = i.edgePx != null && i.edgePx <= FE_SHARP;
     const soft = i.edgePx != null && i.edgePx > FE_SOFT;
 
-    // Learn: a sharp plane at a settled zoom → that focus is right for it.
-    if (
-      sharp && i.edgePx! >= LEARN_MIN_EDGE && (i.edgeContrast ?? 0) >= LEARN_MIN_CONTRAST &&
-      i.zoomSettled && i.locked && i.focusUnits != null
-    ) this.learn(i.zoomUnits, band, i.focusUnits, i.edgePx!, i.now);
 
     this.softSince = soft ? (this.softSince ?? i.now) : null;
     if (i.focusUnits != null) {
@@ -206,6 +201,16 @@ export class FocusController {
       i.now - this.focusHist[0].t >= FOCUS_STILL_MS &&
       Math.max(...recent.map((h) => h.f)) - Math.min(...recent.map((h) => h.f)) <= FOCUS_STILL_UNITS;
     const settled = i.zoomSettled && still;
+
+    // Learn: a sharp plane at a settled zoom with the lens STILL → that focus
+    // is right for this zoom and distance. (Learning while the camera's zoom
+    // tracking was still moving the lens paired a sharp frame with a focus
+    // reading from another moment; the full-tele entry walked from −3870 to
+    // −3309 and the servo then drove planes into blur.)
+    if (
+      sharp && i.edgePx! >= LEARN_MIN_EDGE && (i.edgeContrast ?? 0) >= LEARN_MIN_CONTRAST &&
+      settled && i.locked && i.focusUnits != null
+    ) this.learn(i.zoomUnits, band, i.focusUnits, i.edgePx!, i.now);
     const justSettled = settled && !this.wasSettled;
     this.wasSettled = settled;
 

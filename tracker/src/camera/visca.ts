@@ -923,11 +923,11 @@ export class ViscaCamera implements CameraDriver {
         this.pending7 = null;
         if (!asked || Date.now() - asked.at > 300) return; // stale / unsolicited
         if (asked.kind === "focus") {
-          // A late zoom answer can still land on a focus question; a reading
-          // within a few units of the lens zoom is that, not focus (seen:
-          // "focus" 1401/1431 at zoom 1392/1437 where focus is ≈ −3900).
-          const z = this.pose?.zoomUnits;
-          if (z != null && v >= 0 && Math.abs(v - z) <= 12) return;
+          // A late zoom answer can still land on a focus question (seen:
+          // "focus" 1401/1431/1437 at zoom 1392-1437 where focus is ≈ −3900).
+          // Focus never reads above ~+350 at any zoom on this lens; a value in
+          // the zoom range above that is a zoom answer.
+          if (v > 600) return;
           this.focusPos = { units: v, at: Date.now() };
           return;
         }
