@@ -75,3 +75,14 @@ describe("FocusController gating", () => {
     expect(b).toContainEqual({ kind: "onePush" });
   });
 });
+
+describe("FocusController by target size", () => {
+  it("never sweeps a small (distant) plane; nudges it to the learned point instead", () => {
+    const f = new FocusController();
+    const small = { ...base, zoomUnits: 1437, locked: false, detected: false, sweepOk: true, targetPx: 25 };
+    f.update({ ...small, zoomSettled: false, focusUnits: -3200 });
+    const acts = f.update({ ...small, now: 500, focusUnits: -3200 });
+    expect(acts).not.toContainEqual({ kind: "onePush" });
+    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -670, target: -3870 });
+  });
+});

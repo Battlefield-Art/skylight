@@ -41,6 +41,8 @@ export const NUDGE_MIN_UNITS = 30;
 /** Beyond this a nudge takes >4 s at ~85 u/s; a one-push sweep with the
  *  plane centred lands in ~1-3 s (UAL2317: 1.2 s), so use that instead. */
 export const ONEPUSH_ABOVE_UNITS = 350;
+/** One-push only when the plane spans at least this many full-res px. */
+export const SWEEP_MIN_TARGET_PX = 60;
 const SOFT_HOLD_MS = 700;
 const ACTION_COOLDOWN_MS = 1500;
 const ONEPUSH_COOLDOWN_MS = 8000;
@@ -66,6 +68,8 @@ export interface FocusInput {
    *  to see), the aim settled on the prediction — the camera's centre-
    *  weighted one-push AF will find it (gates sweeps). */
   sweepOk?: boolean;
+  /** Expected plane size across the frame, full-res px (null = unknown). */
+  targetPx?: number | null;
   /** Latest sharpness measurement on the plane, if fresh. */
   edgePx: number | null;
   /** Its contrast (luma p98−p2). */
@@ -143,7 +147,13 @@ export class FocusController {
     if (!i.zoomSettled || i.now - this.lastActionAt < ACTION_COOLDOWN_MS) return out;
 
     const off = target != null && i.focusUnits != null ? target - i.focusUnits : null;
-    const canSweep = (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+    // Distant/high planes are a few dozen pixels: the camera's contrast AF
+    // can't see them and racks focus off into blur (the "high planes go out
+    // of focus and get lost" pattern). Sweeps only for planes big enough to
+    // fill the AF window; small ones get nudged to the learned infinity
+    // point, which is right for them anyway (deep depth of field at range).
+    const bigEnough = (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX;
+    const canSweep = bigEnough && (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
     // Arriving at a zoom we know: go straight to the learned point.
     if (justSettled && off != null && Math.abs(off) > 2 * NUDGE_MIN_UNITS) {
       this.lastActionAt = i.now;

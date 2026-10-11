@@ -1227,6 +1227,7 @@ export class ControlLoop {
         locked: visionLocked && fCentered && fSteady,
         detected: fFresh,
         sweepOk: fSteady && (fCentered || !fFresh),
+        targetPx: angular != null ? (angular / Math.max(0.5, zoom.hfovDeg)) * 1280 : null,
         edgePx: fm && now - fm.t < 700 ? fm.edgePx : null,
         edgeContrast: fm?.contrast ?? null,
         focusUnits: d.getFocusUnits?.() ?? null,
@@ -1861,6 +1862,24 @@ export class ControlLoop {
             score: b.peakSigma,
           };
         });
+        // Nothing moving near the prediction while zoomed in: a tracked,
+        // distant plane barely moves in the frame and the empty sky gives
+        // the motion detector nothing to register against (DAL902: centred,
+        // 14 px, in focus, undetected for 2+ s at 8.7° HFOV). Look for a
+        // static silhouette at the expected spot instead; the world-velocity
+        // tracker still has to agree before it becomes the lock.
+        if (hfov < 20 && (predicted || lockedBefore)) {
+          const near = cands.some((c) => Math.hypot((c.cx - exX) * VISION_W, (c.cy - exY) * VISION_H) < 30);
+          if (!near) {
+            const sil = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx));
+            if (sil && sil.areaPx >= 4) {
+              cands.push({
+                cx: sil.cx, cy: sil.cy, areaPx: sil.areaPx, contrastSigma: 6,
+                box: sil.box, score: 6,
+              });
+            }
+          }
+        }
         // Big in frame: even merged, the motion blob is weighted toward
         // whichever edges moved most this frame. Re-centre the strongest few
         // on the plane's silhouette in the current frame, then drop the
