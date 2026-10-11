@@ -48,14 +48,18 @@ export interface RefShift {
 
 /** Minimum correlation sharpness to trust a reference (survey: 10-130). */
 export const LM_MIN_PEAK = 8;
-/** Physical shifts below this are "unchanged". Above it the shift is applied
+/** Physical shifts below this are "unchanged" — small drift is tracked from
+ *  the planes themselves (loop.foldPassBias): late-afternoon shadows moving
+ *  across the skyline biased the correlation by up to ~2° (a −2.40°
+ *  "shift" stacked on a plane-based −1.93° fold, 2026-10-11 16:13). Above
+ *  it (a re-placed base) the shift is applied
  *  as a DELTA on the current model, the references are re-shot (so the next
  *  check measures only new drift) and auto-cal's samples are shifted by the
  *  same delta — so the two never fight: landmarks track physical drift
  *  (~1°/h observed on 2026-10-11), auto-cal keeps the absolute calibration.
  *  (The earlier fight came from solving from the references' model and not
  *  re-shooting them.) */
-export const LM_APPLY_MIN_DEG = 0.25;
+export const LM_APPLY_MIN_DEG = 3;
 /** Refs must agree with their median within this to count as consistent. */
 export const LM_AGREE_DEG = 0.6;
 export const LM_MIN_GOOD = 4;
@@ -69,6 +73,17 @@ export class LandmarkStore {
       this.set = null;
     }
   }
+  /** Forget the references (memory AND disk) — the model changed under
+   *  them, so the next check must re-shoot instead of compare. */
+  clear(): void {
+    this.set = null;
+    try {
+      fs.rmSync(this.file, { force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+
   save(set: LandmarkSet): void {
     this.set = set;
     try {

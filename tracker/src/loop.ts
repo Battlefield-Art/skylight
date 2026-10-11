@@ -78,7 +78,7 @@ const FOCUS_LUT_FILE = resolve(TRACKER_DIR, "../data/focus-lut.json");
  *  usually followed by a restart), then daily; retries after a failed or
  *  aborted check. */
 const LM_FIRST_DELAY_MS = 60_000;
-const LM_PERIOD_MS = 20 * 60_000;
+const LM_PERIOD_MS = 60 * 60_000;
 const LM_RETRY_MS = 15 * 60_000;
 /** After an interruption: resume at the next idle gap, keeping the frames
  *  already shot while they are this fresh. */
@@ -753,7 +753,7 @@ export class ControlLoop {
     const next = { ...m, panOffsetDeg: m.panOffsetDeg - dAz, tiltOffsetDeg: m.tiltOffsetDeg - dEl };
     this.autoCal.shiftSamples(-dAz, -dEl, m.panGain, m.tiltGain, now);
     this.upstream.patchConfig({ tracker: { mount: next } } as Partial<Config>);
-    this.landmarks.set = null; // re-shoot the references under the new model
+    this.landmarks.clear(); // re-shoot the references under the new model (disk too)
     this.biasHistory = [];
     this.recorder.write("biasFold", { dAz, dEl, mount: next });
     console.log(`[tracker] bias fold-in: pan offset ${(-dAz).toFixed(2)}°, tilt offset ${(-dEl).toFixed(2)}° (last ${BIAS_FOLD_PASSES} passes agree)`);
