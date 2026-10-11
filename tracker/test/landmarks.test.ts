@@ -48,9 +48,18 @@ describe("evaluateShifts", () => {
   const set: LandmarkSet = { capturedAt: 0, model, hfovDeg: 56.48, refs };
   const sh = (dx: number, dy: number, peak = 30): RefShift => ({ dxDeg: dx, dyDeg: dy, peak });
 
-  it("calls small shifts unchanged", () => {
-    const v = evaluateShifts(set, refs.map(() => sh(0.1, -0.05)), model);
-    expect(v.kind).toBe("unchanged");
+  it("leaves small drift to the auto-cal", () => {
+    expect(evaluateShifts(set, refs.map(() => sh(0.1, -0.05)), model).kind).toBe("unchanged");
+    expect(evaluateShifts(set, refs.map(() => sh(0, -0.4)), model).kind).toBe("unchanged");
+  });
+
+  it("applies a remount as a delta on the CURRENT model, not the refs' model", () => {
+    // auto-cal moved the tilt offset 2.4° since the refs were shot
+    const current = { ...model, tiltOffsetDeg: model.tiltOffsetDeg - 2.4 };
+    const v = evaluateShifts(set, refs.map(() => sh(5, 0)), current);
+    expect(v.kind).toBe("shifted");
+    if (v.kind !== "shifted") return;
+    expect(v.model.tiltOffsetDeg).toBeCloseTo(current.tiltOffsetDeg, 1);
   });
 
   it("re-solves a remount and the new model points where the scene says", () => {

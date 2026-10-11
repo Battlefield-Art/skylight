@@ -8,10 +8,11 @@
 // needs no aircraft locks, which a 5° error prevents in the first place.
 //
 // The check runs when the tracker is idle in daylight, at startup and then
-// daily. Small consistent shifts refresh the references (so they follow the
-// auto-cal's refinements); a large consistent shift re-solves the mount
-// offsets + level from the references (gains are untouched — a re-placement
-// cannot change them).
+// daily. Small shifts leave the model to the auto-cal and refresh the
+// references (so they follow its refinements); a large consistent shift is
+// applied as a DELTA on the current model — offsets + level re-solved so each
+// reference pose points where the current model says, displaced by the
+// measured shift (gains untouched: a re-placement cannot change them).
 
 import fs from "node:fs";
 import { dirname } from "node:path";
@@ -47,8 +48,13 @@ export interface RefShift {
 
 /** Minimum correlation sharpness to trust a reference (survey: 10-130). */
 export const LM_MIN_PEAK = 8;
-/** Shifts below this (all refs) are "unchanged". */
-export const LM_APPLY_MIN_DEG = 0.3;
+/** Shifts below this are "unchanged": small drift is the plane-based
+ *  auto-cal's job (it measures against aircraft truth; the references only
+ *  know the model they were shot under). Landmarks step in for remount-class
+ *  moves, which push planes outside the vision lock gate so auto-cal never
+ *  sees them. (At 0.3° the two fought: a 0.4° landmark "shift" re-solved
+ *  from the references' model undid a 2.4° auto-cal correction, twice.) */
+export const LM_APPLY_MIN_DEG = 1.5;
 /** Refs must agree with their median within this to count as consistent. */
 export const LM_AGREE_DEG = 0.6;
 export const LM_MIN_GOOD = 4;
@@ -233,9 +239,10 @@ const median = (a: number[]) => {
 };
 
 /**
- * Decide from per-reference shifts. A shift is a re-solve of offsets + level
- * from samples "this mechanical pose now looks where the reference model said
- * (pose) pointed, displaced by the measured shift".
+ * Decide from per-reference shifts (physical: the scene moved in the frame
+ * at a fixed mechanical pose). A shift is applied as a delta on `current`:
+ * offsets + level re-solved from "this pose now looks where the current
+ * model says, displaced by the measured shift".
  */
 export function evaluateShifts(
   set: LandmarkSet,
@@ -255,11 +262,11 @@ export function evaluateShifts(
     const spread = Math.max(...good.map((g) => Math.abs(g.s.dxDeg - medDx)));
     return { kind: "inconsistent", good: good.length, spreadDeg: spread };
   }
-  if (agree.every((g) => Math.hypot(g.s.dxDeg, g.s.dyDeg) < LM_APPLY_MIN_DEG)) {
+  if (Math.hypot(medDx, medDy) < LM_APPLY_MIN_DEG) {
     return { kind: "unchanged", good: agree.length, medDxDeg: medDx, medDyDeg: medDy };
   }
   const samples = agree.map((g) => {
-    const w = worldFromMount({ panDeg: g.r.panDeg, tiltDeg: g.r.tiltDeg }, set.model);
+    const w = worldFromMount({ panDeg: g.r.panDeg, tiltDeg: g.r.tiltDeg }, current);
     const cosE = Math.max(0.2, Math.cos((w.elDeg * Math.PI) / 180));
     return { panDeg: g.r.panDeg, tiltDeg: g.r.tiltDeg, azDeg: w.azDeg + g.s.dxDeg / cosE, elDeg: w.elDeg + g.s.dyDeg };
   });
