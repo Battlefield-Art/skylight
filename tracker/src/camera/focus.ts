@@ -66,6 +66,8 @@ const ACTION_COOLDOWN_MS = 1500;
  *  only way to save time). */
 const SERVO_BURST_UNITS = 60;
 const SERVO_GAP_MS = 250;
+/** A one-push sweep runs ~1-3 s; the servo stays off meanwhile. */
+const SWEEP_RUN_MS = 3000;
 /** Servo only on the final approach to the commanded stop. */
 const SERVO_ZOOM_TOL = 30;
 const ONEPUSH_COOLDOWN_MS = 8000;
@@ -223,12 +225,17 @@ export class FocusController {
       // A big plane still soft near the learned point: the point is wrong
       // for it (distance) — hand over to a sweep instead of servoing on.
       const softHere = this.softSince != null && i.now - this.softSince > 1500 && Math.abs(err) < 2 * ONEPUSH_ABOVE_UNITS;
+      // Big error on a plane the AF can see: sweep NOW (~400 u/s) rather
+      // than crawl at ~80 u/s — and not "once settled": the servo's own
+      // bursts kept the lens from ever settling, so the sweep never fired
+      // (TZP26 sat 950 units off, a blur, for 12+ s).
       const sweepNow = (big || softHere) && (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX &&
-        (big ? settled : true) && (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
-      if (sweepNow && softHere) {
+        (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+      if (sweepNow) {
         this.lastActionAt = i.now;
         this.lastOnePushAt = i.now;
         this.softSince = null;
+        this.servoUntil = i.now + SWEEP_RUN_MS; // let the sweep finish
         out.push({ kind: "onePush" });
         return out;
       }

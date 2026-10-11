@@ -53,14 +53,14 @@ describe("FocusController", () => {
   it("servos toward the commanded stop's learned point during the final approach", () => {
     const f = new FocusController();
     // still zooming (lens 200 short of the stop): no servo yet
-    expect(f.update({ ...base, zoomUnits: 1237, commandedZoom: 1437, focusUnits: -1000 })).not.toContainEqual(
+    expect(f.update({ ...base, targetPx: 30, zoomUnits: 1237, commandedZoom: 1437, focusUnits: -1000 })).not.toContainEqual(
       expect.objectContaining({ kind: "nudge" }));
     // within 30 of the stop: bursts even while the lens is still moving
-    const a = f.update({ ...base, now: 300, zoomUnits: 1420, commandedZoom: 1437, focusUnits: -3300 });
+    const a = f.update({ ...base, targetPx: 30, now: 300, zoomUnits: 1420, commandedZoom: 1437, focusUnits: -3300 });
     expect(a).toEqual([{ kind: "nudge", deltaUnits: -150, target: -3870 }]); // big error → big burst
     // next burst only after it has run + a gap
-    expect(f.update({ ...base, now: 500, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3360 })).toEqual([]);
-    expect(f.update({ ...base, now: 2300, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3700 })).toContainEqual(
+    expect(f.update({ ...base, targetPx: 30, now: 500, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3360 })).toEqual([]);
+    expect(f.update({ ...base, targetPx: 30, now: 2300, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3700 })).toContainEqual(
       { kind: "nudge", deltaUnits: -60, target: -3870 });
   });
 
@@ -108,5 +108,15 @@ describe("FocusController distance bands", () => {
     const near = { ...base, zoomUnits: 1437, commandedZoom: 1437, slantM: 2000, targetPx: 200, detected: true, edgePx: 9, focusUnits: -3850 };
     const acts = run(f, near, 0, 2400);
     expect(acts).toContainEqual({ kind: "onePush" });
+  });
+});
+
+describe("FocusController sweeps big planes at once", () => {
+  it("sweeps a big, centred plane far off focus without waiting for the lens to settle", () => {
+    const f = new FocusController();
+    const acts = f.update({ ...base, zoomUnits: 1437, commandedZoom: 1437, targetPx: 150, sweepOk: true, focusUnits: -2900 });
+    expect(acts).toContainEqual({ kind: "onePush" });
+    // and the servo holds off while it runs
+    expect(f.update({ ...base, now: 1000, zoomUnits: 1437, commandedZoom: 1437, targetPx: 150, focusUnits: -3300 })).toEqual([]);
   });
 });
