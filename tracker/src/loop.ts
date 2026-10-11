@@ -1201,6 +1201,7 @@ export class ControlLoop {
         zoomSettled: fZoomSettled,
         locked: visionLocked && fCentered && fSteady,
         edgePx: fm && now - fm.t < 700 ? fm.edgePx : null,
+        edgeContrast: fm?.contrast ?? null,
         focusUnits: d.getFocusUnits?.() ?? null,
       });
       for (const a of focusActs) {

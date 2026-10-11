@@ -24,8 +24,18 @@ import { dirname } from "node:path";
 export const FE_SHARP = 3.0;
 /** ...and above which it counts as soft (needs correcting). */
 export const FE_SOFT = 4.0;
-/** Zoom buckets for the learned table, units. */
-export const LUT_BUCKET = 32;
+/** Zoom buckets for the learned table, units. Near tele the zoom-tracking
+ *  curve is ~37 focus units per zoom unit (zoom 1385 → −1924, 1437 → −3870),
+ *  so only the exact zoom is meaningful: the ladder's rungs recur exactly.
+ *  (A 32-unit bucket with neighbour fallback nudged a 1437 plane to the
+ *  focus learned at 1404 — 1700 units off — and blurred a whole pass.) */
+export const LUT_BUCKET = 4;
+/** Seed: full tele, measured sharp at −3857…−3905 on two passes + probe. */
+export const TELE_SEED: [number, number] = [1437, -3870];
+/** Believable measurements only: sub-pixel edges are compression/tiny-plane
+ *  artefacts, low contrast is haze. */
+const LEARN_MIN_EDGE = 1.2;
+const LEARN_MIN_CONTRAST = 25;
 /** Nudge only when the lens is at least this far from the learned point. */
 export const NUDGE_MIN_UNITS = 30;
 const SOFT_HOLD_MS = 700;
@@ -44,6 +54,8 @@ export interface FocusInput {
   locked: boolean;
   /** Latest sharpness measurement on the plane, if fresh. */
   edgePx: number | null;
+  /** Its contrast (luma p98−p2). */
+  edgeContrast?: number | null;
   /** Lens focus position (signed raw units), if known. */
   focusUnits: number | null;
 }
@@ -66,24 +78,22 @@ export class FocusController {
   private dirty = false;
   private lastSaveAt = 0;
 
-  constructor(private file: string | null = null) {
-    if (!file) return;
-    try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, LutEntry>;
-      for (const [k, v] of Object.entries(raw)) this.lut.set(Number(k), v);
-    } catch {
-      /* first run */
+  constructor(private file: string | null = null, seed = true) {
+    if (file) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { bucket?: number; lut?: Record<string, LutEntry> };
+        if (raw.bucket === LUT_BUCKET && raw.lut) for (const [k, v] of Object.entries(raw.lut)) this.lut.set(Number(k), v);
+      } catch {
+        /* first run */
+      }
     }
+    const tb = Math.round(TELE_SEED[0] / LUT_BUCKET);
+    if (seed && !this.lut.has(tb)) this.lut.set(tb, { focus: TELE_SEED[1], edgePx: 3, n: 0, at: 0 });
   }
 
-  /** Learned sharp focus for a zoom (nearest bucket within one step). */
+  /** Learned sharp focus for exactly this zoom (its 4-unit bucket). */
   learned(zoomUnits: number): number | null {
-    const b = Math.round(zoomUnits / LUT_BUCKET);
-    for (const k of [b, b - 1, b + 1]) {
-      const e = this.lut.get(k);
-      if (e) return e.focus;
-    }
-    return null;
+    return this.lut.get(Math.round(zoomUnits / LUT_BUCKET))?.focus ?? null;
   }
 
   table(): Record<number, LutEntry> {
@@ -108,7 +118,10 @@ export class FocusController {
     const soft = i.edgePx != null && i.edgePx > FE_SOFT;
 
     // Learn: a sharp plane at a settled zoom → that focus is right for it.
-    if (sharp && i.zoomSettled && i.locked && i.focusUnits != null) this.learn(i.zoomUnits, i.focusUnits, i.edgePx!, i.now);
+    if (
+      sharp && i.edgePx! >= LEARN_MIN_EDGE && (i.edgeContrast ?? 0) >= LEARN_MIN_CONTRAST &&
+      i.zoomSettled && i.locked && i.focusUnits != null
+    ) this.learn(i.zoomUnits, i.focusUnits, i.edgePx!, i.now);
 
     this.softSince = soft ? (this.softSince ?? i.now) : null;
     const justSettled = i.zoomSettled && !this.wasSettled;
@@ -161,7 +174,7 @@ export class FocusController {
     this.dirty = false;
     try {
       fs.mkdirSync(dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, JSON.stringify(this.table()));
+      fs.writeFileSync(this.file, JSON.stringify({ bucket: LUT_BUCKET, lut: this.table() }));
     } catch {
       /* best-effort */
     }
