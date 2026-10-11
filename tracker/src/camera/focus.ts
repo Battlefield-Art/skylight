@@ -158,7 +158,7 @@ export class FocusController {
    *  distance band (default: far). */
   learned(zoomUnits: number, band = 2): number | null {
     const b = Math.round(zoomUnits / LUT_BUCKET) * 10;
-    const v = this.lut.get(b + band)?.focus ?? null;
+    const v = this.lut.get(b + band)?.focus ?? this.interpolated(zoomUnits, band);
     if (v == null) return null;
     // Physics: a farther plane never needs a NEARER focus (larger value)
     // than a closer one at the same zoom. Clamp against the nearer bands
@@ -170,6 +170,26 @@ export class FocusController {
       if (nearer && nearer.n >= 5) out = Math.min(out, nearer.focus);
     }
     return out;
+  }
+
+  /**
+   * No entry at this exact zoom: interpolate between the nearest learned
+   * zooms on each side (same band, ≥3 samples, within 60 zoom units). The
+   * curve is steep but smooth; JBU8700 sat soft for 12 s at zoom 1341 with
+   * 1332 and 1385 both learned.
+   */
+  private interpolated(zoomUnits: number, band: number): number | null {
+    let lo: { z: number; f: number } | null = null;
+    let hi: { z: number; f: number } | null = null;
+    for (const [k, e] of this.lut) {
+      if (k % 10 !== band || e.n < 3) continue;
+      const z = Math.floor(k / 10) * LUT_BUCKET;
+      if (z <= zoomUnits && zoomUnits - z <= 60 && (!lo || z > lo.z)) lo = { z, f: e.focus };
+      if (z >= zoomUnits && z - zoomUnits <= 60 && (!hi || z < hi.z)) hi = { z, f: e.focus };
+    }
+    if (!lo || !hi) return null;
+    if (hi.z === lo.z) return lo.f;
+    return lo.f + ((zoomUnits - lo.z) / (hi.z - lo.z)) * (hi.f - lo.f);
   }
 
   table(): Record<number, LutEntry> {

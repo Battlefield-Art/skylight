@@ -139,3 +139,15 @@ describe("FocusController robustness", () => {
     expect(g.learned(1437, 2)).toBe(-3900);
   });
 });
+
+describe("FocusController interpolation", () => {
+  it("interpolates between learned neighbours for an unlearned zoom", () => {
+    const f = new FocusController(null, false);
+    run(f, { ...base, zoomUnits: 1332, edgePx: 2, focusUnits: -950 }, 0, 2000);
+    run(f, { ...base, zoomUnits: 1384, edgePx: 2, focusUnits: -1920 }, 3000, 5000);
+    const v = f.learned(1344)!;
+    expect(v).toBeLessThan(-950);
+    expect(v).toBeGreaterThan(-1920);
+    expect(f.learned(1500)).toBeNull(); // no neighbour above within 60
+  });
+});
