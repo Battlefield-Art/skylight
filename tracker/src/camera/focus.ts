@@ -44,6 +44,10 @@ export const TELE_SEED: [number, number] = [1437, -3870];
  *  artefacts, low contrast is haze. */
 const LEARN_MIN_EDGE = 1.2;
 const LEARN_MIN_CONTRAST = 25;
+/** Samples farther than this from an existing entry are ignored (the depth
+ *  of field at tele is ~300 units; a −2630 "sharp" sample once moved the
+ *  far-band 1437 point by 190 units in two updates). */
+const LEARN_MAX_JUMP = 250;
 /** Nudge only when the lens is at least this far from the learned point. */
 export const NUDGE_MIN_UNITS = 30;
 /** Beyond this a nudge takes >4 s at ~85 u/s; a one-push sweep with the
@@ -153,7 +157,19 @@ export class FocusController {
   /** Learned sharp focus for exactly this zoom (its 4-unit bucket) and
    *  distance band (default: far). */
   learned(zoomUnits: number, band = 2): number | null {
-    return this.lut.get(Math.round(zoomUnits / LUT_BUCKET) * 10 + band)?.focus ?? null;
+    const b = Math.round(zoomUnits / LUT_BUCKET) * 10;
+    const v = this.lut.get(b + band)?.focus ?? null;
+    if (v == null) return null;
+    // Physics: a farther plane never needs a NEARER focus (larger value)
+    // than a closer one at the same zoom. Clamp against the nearer bands
+    // (a 2-sample far-band entry at −3680 vs −3815 mid pulled UAL2281 out
+    // of focus as it flew away).
+    let out = v;
+    for (let nb = band - 1; nb >= 0; nb--) {
+      const nearer = this.lut.get(b + nb);
+      if (nearer && nearer.n >= 5) out = Math.min(out, nearer.focus);
+    }
+    return out;
   }
 
   table(): Record<number, LutEntry> {
@@ -305,7 +321,9 @@ export class FocusController {
     const b = Math.round(zoom / LUT_BUCKET) * 10 + band;
     const e = this.lut.get(b);
     if (!e) this.lut.set(b, { focus, edgePx, n: 1, at: now });
-    else {
+    else if (Math.abs(focus - e.focus) > LEARN_MAX_JUMP) {
+      return; // one wild "sharp" reading must not drag an entry
+    } else {
       // Weight sharper observations more.
       e.focus = e.focus + LEARN_ALPHA * (focus - e.focus);
       e.edgePx = e.edgePx + 0.3 * (edgePx - e.edgePx);

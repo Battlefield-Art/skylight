@@ -126,3 +126,16 @@ describe("FocusController prefers the servo when a point is learned", () => {
     expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -150, target: -3870 });
   });
 });
+
+describe("FocusController robustness", () => {
+  it("ignores a wild sample and keeps far bands no nearer than mid", () => {
+    const f = new FocusController(); // far seed -3870 @1437
+    run(f, { ...base, zoomUnits: 1437, edgePx: 2.2, focusUnits: -2600 }, 0, 1400); // bogus
+    expect(f.learned(1437, 2)).toBe(-3870);
+    // mid band learns -3900 (well supported); a far entry nearer than that is clamped
+    const g = new FocusController(null, false);
+    run(g, { ...base, zoomUnits: 1437, slantM: 4000, edgePx: 2.0, focusUnits: -3900 }, 0, 3000);
+    run(g, { ...base, zoomUnits: 1437, slantM: 7000, edgePx: 2.0, focusUnits: -3700 }, 4000, 5400);
+    expect(g.learned(1437, 2)).toBe(-3900);
+  });
+});
