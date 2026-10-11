@@ -97,6 +97,12 @@ export interface TargetCriteria {
   hysteresisSec: number;
   /** A challenger must beat the current target's score by this margin. */
   switchMargin: number;
+  /**
+   * Skip aircraft within this many degrees of the sun (absent = 15). The
+   * zoomed lens pointed at the sun is a blown-out frame at best and a
+   * sensor burn at worst.
+   */
+  sunAvoidDeg?: number;
 }
 
 export interface Candidate {
@@ -193,6 +199,17 @@ export interface VisionState {
     lastAppliedAt: number | null;
     spanAzDeg: number;
     spanElDeg: number;
+  };
+  /** Landmark (skyline) re-calibration: catches a moved/re-placed base. */
+  landmarks?: {
+    refs: number;
+    capturedAt: number | null;
+    running: boolean;
+    lastCheckAt: number | null;
+    /** Last verdict kind and median measured shift, deg. */
+    lastVerdict: string | null;
+    lastShiftDeg: { dx: number; dy: number } | null;
+    lastAppliedAt: number | null;
   };
 }
 

@@ -24,6 +24,7 @@ import {
   worldFromMount,
   zoomUnitsFromHfov,
   type Aircraft,
+  type GeoPoint,
   type CalibrationRef,
   type CameraPose,
   type Config,
@@ -37,7 +38,17 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import type { CameraDriver } from "./camera/driver.js";
 import { AutoCalibrator } from "./calibration/auto.js";
-import { CalibrationSession } from "./calibration/session.js";
+import { CalibrationSession, visibleBodies } from "./calibration/session.js";
+import {
+  LandmarkStore,
+  decodeImg,
+  encodeImg,
+  evaluateShifts,
+  landmarkImage,
+  phaseCorrelate,
+  shiftDeg,
+  type LandmarkSet,
+} from "./calibration/landmarks.js";
 import { planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
@@ -56,6 +67,20 @@ import type { VideoStream } from "./video/stream.js";
 
 const TRACKER_DIR = dirname(fileURLToPath(import.meta.url));
 const AUTOCAL_FILE = resolve(TRACKER_DIR, "../data/autocal.json");
+const LANDMARK_FILE = resolve(TRACKER_DIR, "../data/landmarks.json");
+/** Landmark check cadence: first one shortly after start (a remount is
+ *  usually followed by a restart), then daily; retries after a failed or
+ *  aborted check. */
+const LM_FIRST_DELAY_MS = 60_000;
+const LM_PERIOD_MS = 24 * 3600_000;
+const LM_RETRY_MS = 15 * 60_000;
+/** Idle this long (no target) before taking the camera for ~40 s. */
+const LM_IDLE_MS = 20_000;
+/** Sun at least this high: the skyline needs daylight to correlate. */
+const LM_MIN_SUN_EL = 8;
+/** Reference azimuths (world); el = local horizon − 4° so the skyline sits
+ *  in the upper half of a wide frame. */
+const LM_AZIMUTHS = [15, 60, 105, 150, 195, 240, 285, 330];
 /** Vision bias-correction clamp, deg. The estimator measures an exogenous
  *  ADS-B-vs-mount offset directly (no plant feedback), so it cannot wind up;
  *  the clamp only bounds the damage of a wrong lock. A stale mount model
@@ -212,6 +237,18 @@ export class ControlLoop {
   private tracks = new TrackTable();
   /** Continuous auto-calibration from locked passes. */
   private autoCal = new AutoCalibrator(AUTOCAL_FILE);
+  private landmarks = new LandmarkStore(LANDMARK_FILE);
+  private lmRunning = false;
+  private lmAbort = false;
+  private lmNextAt = Date.now() + LM_FIRST_DELAY_MS;
+  /** Consecutive "shifted" applies without an "unchanged" confirmation. */
+  private lmApplies = 0;
+  private lmStatus: {
+    lastCheckAt: number | null;
+    lastVerdict: string | null;
+    lastShiftDeg: { dx: number; dy: number } | null;
+    lastAppliedAt: number | null;
+  } = { lastCheckAt: null, lastVerdict: null, lastShiftDeg: null, lastAppliedAt: null };
   private lastAutoCalAt = 0;
   /** Previous vision frame (luma) + its pose, for motion-compensated diffing. */
   private prevLuma: Uint8Array | null = null;
@@ -492,6 +529,157 @@ export class ControlLoop {
 
   // --- the tick ---
 
+  private sunCache: { t: number; sun: { azDeg: number; elDeg: number } | null } | null = null;
+
+  /** Sun direction, refreshed every 30 s (it moves ~0.25°/min). */
+  private sunAt(site: GeoPoint, now: number): { azDeg: number; elDeg: number } | null {
+    if (!this.sunCache || now - this.sunCache.t > 30_000) {
+      const sun = visibleBodies(site, now, -5).find((b) => b.name === "Sun");
+      this.sunCache = { t: now, sun: sun ? { azDeg: sun.azDeg, elDeg: sun.elDeg } : null };
+    }
+    return this.sunCache.sun;
+  }
+
+  /** Mechanical poses for a fresh reference set (current model). */
+  private landmarkPoses(cfg: TrackerConfig): { panDeg: number; tiltDeg: number }[] {
+    const out: { panDeg: number; tiltDeg: number }[] = [];
+    const lim = cfg.limits;
+    for (const az of LM_AZIMUTHS) {
+      const el = horizonMinEl(lim.horizon, az, 12) - 4;
+      const pt = mountFromWorld(az, el, cfg.mount);
+      if (pt.panDeg < lim.panMinDeg + 2 || pt.panDeg > lim.panMaxDeg - 2) continue;
+      out.push({ panDeg: pt.panDeg, tiltDeg: Math.max(lim.tiltMinDeg + 0.5, pt.tiltDeg) });
+    }
+    return out;
+  }
+
+  /**
+   * Drive to a mechanical pose at wide zoom, let it settle, and return the
+   * landmark image of a frame shot after the settle. undefined = aborted
+   * (a target appeared), null = no usable frame.
+   */
+  private async shootLandmark(
+    p: { panDeg: number; tiltDeg: number },
+    cfg: TrackerConfig,
+  ): Promise<Float64Array | null | undefined> {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const d = this.driver();
+    const target = { ...p, zoomUnits: cfg.units.zoomWideUnits };
+    this.lastCommanded = target;
+    d.gotoAbsolute(target);
+    const t0 = Date.now();
+    for (;;) {
+      await sleep(250);
+      if (this.lmAbort) return undefined;
+      const pose = d.getPose();
+      if (
+        pose &&
+        Math.abs(pose.panDeg - p.panDeg) < 0.15 &&
+        Math.abs(pose.tiltDeg - p.tiltDeg) < 0.15 &&
+        Math.abs(pose.zoomUnits - target.zoomUnits) < 5
+      ) break;
+      if (Date.now() - t0 > 15_000) return null;
+    }
+    // Encoder settled; the stream lags ~0.9 s behind it.
+    const settledAt = Date.now();
+    await sleep(1800);
+    if (this.lmAbort) return undefined;
+    const frame = this.video.latestFrame();
+    if (!frame || this.video.latestFrameAt() < settledAt + 1000) return null;
+    const luma = await decodeLuma(frame);
+    return landmarkImage(luma, VISION_W, VISION_H);
+  }
+
+  private async runLandmarkCheck(): Promise<void> {
+    this.lmRunning = true;
+    this.lmAbort = false;
+    this.atHome = true; // hold off the idle park while we borrow the camera
+    const cfg = this.cfg();
+    const startedAt = Date.now();
+    try {
+      const set = this.landmarks.set;
+      const hfov = hfovFromZoomUnits(cfg.units.zoomWideUnits, cfg.zoom.fovLut);
+      const poses = set ? set.refs.map((r) => ({ panDeg: r.panDeg, tiltDeg: r.tiltDeg })) : this.landmarkPoses(cfg);
+      const imgs: (Float64Array | null)[] = [];
+      for (const p of poses) {
+        const img = await this.shootLandmark(p, cfg);
+        if (img === undefined) {
+          this.lmNextAt = Date.now() + LM_RETRY_MS;
+          this.recorder.write("landmarks", { verdict: "aborted" });
+          return;
+        }
+        imgs.push(img);
+      }
+      const now = Date.now();
+      this.lmStatus.lastCheckAt = now;
+      const capture = (model = cfg.mount): LandmarkSet => ({
+        capturedAt: now,
+        model,
+        hfovDeg: hfov,
+        refs: poses.flatMap((p, i) => (imgs[i] ? [{ ...p, img: encodeImg(imgs[i]!) }] : [])),
+      });
+
+      if (!set) {
+        const fresh = capture();
+        if (fresh.refs.length >= 4) {
+          this.landmarks.save(fresh);
+          this.lmStatus.lastVerdict = "captured";
+          this.lmNextAt = now + LM_PERIOD_MS;
+          console.log(`[tracker] landmarks: captured ${fresh.refs.length} skyline references`);
+        } else {
+          this.lmStatus.lastVerdict = "capture-failed";
+          this.lmNextAt = now + LM_RETRY_MS;
+        }
+        this.recorder.write("landmarks", { verdict: this.lmStatus.lastVerdict, refs: fresh.refs.length });
+        return;
+      }
+
+      const shifts = imgs.map((g, i) => (g ? shiftDeg(phaseCorrelate(decodeImg(set.refs[i].img), g), set.hfovDeg) : null));
+      const verdict = evaluateShifts(set, shifts, cfg.mount);
+      this.lmStatus.lastVerdict = verdict.kind;
+      this.lmStatus.lastShiftDeg =
+        "medDxDeg" in verdict ? { dx: verdict.medDxDeg, dy: verdict.medDyDeg } : null;
+      this.recorder.write("landmarks", { verdict, shifts });
+      console.log(
+        `[tracker] landmarks: ${verdict.kind} (${verdict.good}/${set.refs.length} refs)` +
+          ("medDxDeg" in verdict ? ` shift ${verdict.medDxDeg.toFixed(2)}°/${verdict.medDyDeg.toFixed(2)}°` : ""),
+      );
+
+      if (verdict.kind === "shifted" && this.lmApplies < 3) {
+        this.lmApplies++;
+        this.upstream.patchConfig({ tracker: { mount: verdict.model } } as Partial<Config>);
+        this.corrAz = 0;
+        this.corrAzX = 0;
+        this.corrEl = 0;
+        this.corrAzApp = 0;
+        this.corrElApp = 0;
+        // Pre-move plane samples would drag the model back.
+        this.autoCal.reset(now);
+        this.lmStatus.lastAppliedAt = now;
+        this.recorder.write("landmarksApplied", { model: verdict.model, rmsDeg: verdict.rmsDeg });
+        // Confirm shortly: the re-check should come back "unchanged".
+        this.lmNextAt = now + 2 * 60_000;
+        return;
+      }
+      if (verdict.kind === "unchanged") {
+        this.lmApplies = 0;
+        // Follow the auto-cal: references re-shot under a model the planes
+        // have refined since are better truth than the old ones.
+        const acAt = this.autoCal.status(cfg.mount).lastAppliedAt;
+        if (acAt != null && acAt > set.capturedAt) this.landmarks.save(capture());
+        this.lmNextAt = now + LM_PERIOD_MS;
+        return;
+      }
+      this.lmNextAt = now + (verdict.kind === "shifted" ? LM_PERIOD_MS : LM_RETRY_MS);
+    } catch (e) {
+      console.warn("[tracker] landmark check failed:", e);
+      this.lmNextAt = startedAt + LM_RETRY_MS;
+    } finally {
+      this.lmRunning = false;
+      this.atHome = false; // re-park at home
+    }
+  }
+
   private resetSetpoint(): void {
     this.azTracker.reset();
     this.elTracker.reset();
@@ -571,6 +759,7 @@ export class ControlLoop {
       undefined,
       undefined,
       cfg.limits.horizon,
+      this.sunAt(cfg.site, now),
     );
 
     if (tracking) {
@@ -1349,6 +1538,19 @@ export class ControlLoop {
       this.recorder.write("home", { azDeg, elDeg: cfg.home.elDeg });
     }
 
+    // Landmark re-calibration: borrow the idle camera in daylight.
+    if (this.lmRunning && (prediction || this.mode !== "auto")) this.lmAbort = true;
+    if (
+      !this.lmRunning &&
+      this.mode === "auto" &&
+      !prediction &&
+      now >= this.lmNextAt &&
+      now - this.lastTargetAt > LM_IDLE_MS &&
+      (this.sunAt(cfg.site, now)?.elDeg ?? -90) > LM_MIN_SUN_EL
+    ) {
+      void this.runLandmarkCheck();
+    }
+
     // Aim/prediction history for frame-lag-compensated vision. Entries are
     // timestamped `now`, so the dead-reckoned pose is the right aim here.
     if (poseEst && prediction) {
@@ -1477,6 +1679,12 @@ export class ControlLoop {
           };
         }),
         autoCal: cfg.vision.autoCalibrate ? this.autoCal.status(cfg.mount) : undefined,
+        landmarks: {
+          refs: this.landmarks.set?.refs.length ?? 0,
+          capturedAt: this.landmarks.set?.capturedAt ?? null,
+          running: this.lmRunning,
+          ...this.lmStatus,
+        },
       },
       site: cfg.site,
       upstream: {

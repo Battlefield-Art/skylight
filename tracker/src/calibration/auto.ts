@@ -143,6 +143,14 @@ export class AutoCalibrator {
     return true;
   }
 
+  /** Drop every sample: the mount physically moved, so they describe a
+   *  pose→world mapping that no longer exists. */
+  reset(now: number): void {
+    this.samples = [];
+    this.dirty = false;
+    this.save(now, true);
+  }
+
   status(current: MountModel): AutoCalStatus {
     return {
       samples: this.samples.length,

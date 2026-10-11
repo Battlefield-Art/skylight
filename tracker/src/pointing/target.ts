@@ -4,6 +4,7 @@
 import {
   MI_TO_M,
   aircraftGeoPoint,
+  angularSepDeg,
   azElFromSite,
   fixAgeSec,
   horizonMinEl,
@@ -72,7 +73,10 @@ export function selectTarget(
   staleSec = 15,
   posStaleSec = 30,
   horizon?: { azDeg: number; minElDeg: number }[],
+  /** Sun direction (null/absent = below the horizon or unknown). */
+  sun?: { azDeg: number; elDeg: number } | null,
 ): Selection {
+  const sunAvoid = c.sunAvoidDeg ?? 15;
   const candidates: Candidate[] = [];
 
   for (const ac of aircraft) {
@@ -93,6 +97,7 @@ export function selectTarget(
     // stays above the roofline/trees).
     if (azEl.elDeg < horizonMinEl(horizon, azEl.azDeg, -90) + 1) continue;
     if (azEl.slantM > c.maxRangeMi * MI_TO_M) continue;
+    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid) continue;
     const { s, note } = score(ac, azEl, mode, c);
     candidates.push({
       hex: ac.hex,

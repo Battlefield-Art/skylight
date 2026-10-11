@@ -260,8 +260,11 @@ export class PassArchive {
     const cfg = this.opts.config();
     const pose = state.pose;
     const cmd = state.target.commandedPanTilt ?? state.commanded;
+    // The lens's actual FOV (the detector's dcx/dcy are frame fractions at
+    // it); target.hfovDeg is the zoom being COMMANDED, which leads the lens
+    // by seconds during a zoom move.
     const hfov =
-      state.target.hfovDeg ?? (pose ? hfovFromZoomUnits(pose.zoomUnits, cfg.zoom.fovLut) : null);
+      pose ? hfovFromZoomUnits(pose.zoomUnits, cfg.zoom.fovLut) : state.target.hfovDeg;
     const det = state.vision.detection;
     const pred = state.target.predicted;
     const ac = this.opts.find(s.hex);
