@@ -431,6 +431,55 @@ export class ViscaCamera implements CameraDriver {
     return st.onHi ? hiStep : loStep;
   }
 
+  /** Tilt rests only on detents ~0.33° apart (probed at full tele: a
+   *  pulse moves 0 or 22-24 encoder units, never less). Below the slowest
+   *  gear the dither's bursts slid one or two detents and the loop then
+   *  pulsed back — a 0.3-0.8° up-down limit cycle, 15-35% of the frame
+   *  height at 4° HFOV. The stepper below takes exactly one detent per
+   *  pulse, only in the direction the plane needs. */
+  static readonly TILT_DETENT_DEG = 0.33;
+  private static readonly TILT_PULSE_MS = 90;
+  /** Zoom from which the stepper replaces dithering (detent vs frame). */
+  private static readonly STEPPER_MIN_ZOOM = 900;
+  private tiltStepper = { acc: 0, until: 0, dir: 0, lastAt: 0, active: false };
+
+  /**
+   * Single-detent tilt stepping for rates below the slowest gear. Integrates
+   * the wanted rate; at 0.6 detent of accumulated demand fires one short
+   * speed-2 pulse (= one detent) and books a full detent. Reversal needs the
+   * demand to swing 1.2 detents the other way, so noise can't rock it.
+   * Returns null when the regular dither should drive.
+   */
+  private tiltDetentStep(
+    table: [number, number][],
+    want: number,
+    zoom: number,
+    now: number,
+  ): { step: number; dir: number } | null {
+    const st = this.tiltStepper;
+    const dt = st.lastAt ? Math.min(0.2, (now - st.lastAt) / 1000) : 0;
+    st.lastAt = now;
+    const slowest = table[0][1];
+    const engaged = zoom >= ViscaCamera.STEPPER_MIN_ZOOM && Math.abs(want) < 0.8 * slowest;
+    if (!engaged) {
+      st.active = false;
+      st.acc = 0;
+      st.until = 0;
+      return null;
+    }
+    st.active = true;
+    if (now < st.until) return { step: 2, dir: st.dir };
+    const D = ViscaCamera.TILT_DETENT_DEG;
+    st.acc = Math.max(-1.5 * D, Math.min(1.5 * D, st.acc + want * dt));
+    if (Math.abs(st.acc) >= 0.6 * D) {
+      st.dir = Math.sign(st.acc);
+      st.acc -= st.dir * D;
+      st.until = now + ViscaCamera.TILT_PULSE_MS;
+      return { step: 2, dir: st.dir };
+    }
+    return { step: STOP_STEP, dir: 0 };
+  }
+
   /** Stop velocity drives this far before a mechanical limit, deg. */
   private static readonly LIMIT_MARGIN_DEG = 2.5;
 
@@ -485,7 +534,17 @@ export class ViscaCamera implements CameraDriver {
     const R = opts?.rippleDeg ?? ViscaCamera.DITHER_RIPPLE_DEG;
     const RT = opts?.rippleTiltDeg ?? R;
     const panStep = this.pickDithered(this.panDither, speedTableAt("pan", z), pd, now, R);
-    const tiltStep = this.pickDithered(this.tiltDither, speedTableAt("tilt", z), td, now, RT);
+    const tiltTable = speedTableAt("tilt", z);
+    let tiltStep: number;
+    const stepper = this.tiltDetentStep(tiltTable, td, z, now);
+    if (stepper !== null) {
+      tiltStep = stepper.step;
+      td = stepper.dir; // direction of the pulse in flight (0 = stopped)
+      this.cmdTiltDps = stepper.step === STOP_STEP ? 0 : stepper.dir * stepRate(tiltTable, stepper.step);
+      this.tiltDither.acc = 0;
+    } else {
+      tiltStep = this.pickDithered(this.tiltDither, tiltTable, td, now, RT);
+    }
     // Pan units increase to the RIGHT (02); tilt units increase UP (01).
     const panDir = panStep === STOP_STEP ? 0x03 : pd > 0 ? 0x02 : 0x01;
     const tiltDir = tiltStep === STOP_STEP ? 0x03 : td > 0 ? 0x01 : 0x02;
