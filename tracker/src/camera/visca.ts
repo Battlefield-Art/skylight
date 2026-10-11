@@ -737,15 +737,25 @@ export class ViscaCamera implements CameraDriver {
   private inquirePosition(): void {
     this.sendInquiry([0x81, 0x09, 0x06, 0x12, 0xff]); // pan/tilt position
     // Focus and zoom answers are both `90 50 <4 nibbles> ff` and replies
-    // carry no usable seq, so focus gets its own cycle (every 4th, no zoom
-    // inquiry in it) and is told apart by value (zoom is 0..1437; this lens
-    // reports focus as 0xF7xx-0xFFxx, i.e. negative when read signed).
+    // carry no usable seq, so each cycle asks for exactly ONE of them (focus
+    // every 4th) and the 7-byte answer is matched to what was asked. The
+    // value can't tell them apart: focus crosses zero near zoom ~1000 and
+    // small positive focus readings were taken for zoom 20-170 (the zoom
+    // "flapping" 14°↔54° every 0.2 s that broke locks, 2026-10-11).
+    // One question outstanding at a time: while the last one is unanswered
+    // (<300 ms) this cycle asks nothing, so an answer can never be matched to
+    // a later question.
+    const now = Date.now();
+    if (this.pending7 && now - this.pending7.at < 300) return;
     if (++this.inquiryCycle % 4 === 0) {
+      this.pending7 = { kind: "focus", at: now };
       this.sendInquiry([0x81, 0x09, 0x04, 0x48, 0xff]); // focus position
     } else {
+      this.pending7 = { kind: "zoom", at: now };
       this.sendInquiry([0x81, 0x09, 0x04, 0x47, 0xff]); // zoom position
     }
   }
+  private pending7: { kind: "zoom" | "focus"; at: number } | null = null;
 
   /** Lens focus position (inquiry, signed raw units; larger = nearer). */
   getFocusUnits(): number | null {
@@ -814,14 +824,16 @@ export class ViscaCamera implements CameraDriver {
           zoomUnits: this.pose?.zoomUnits ?? 0,
         };
       } else if (payload.length === 7 && payload[payload.length - 1] === 0xff) {
-        const v = fromNibbles(payload.subarray(2, 6));
-        const zoomMax = this.o.units.zoomTeleUnits ?? 1437;
-        // fromNibbles reads 16 bits signed: this lens's focus comes back as
-        // 0xF7xx-0xFFxx = about -2100..-100 (more negative = farther).
-        if (v < 0 || v > zoomMax + 64) {
+        const v = fromNibbles(payload.subarray(2, 6)); // 16-bit signed
+        const asked = this.pending7;
+        this.pending7 = null;
+        if (!asked || Date.now() - asked.at > 300) return; // stale / unsolicited
+        if (asked.kind === "focus") {
           this.focusPos = { units: v, at: Date.now() };
           return;
         }
+        const zoomMax = Math.max(this.o.units.zoomWideUnits, this.o.units.zoomTeleUnits);
+        if (v < 0 || v > zoomMax + 64) return; // not a zoom reading
         const zoom = v;
         this.lastInquiryReply = Date.now();
         this.pose = {
