@@ -54,6 +54,7 @@ import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom } from "./pointing/zoom.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
+import { silhouetteCentroid } from "./vision/silhouette.js";
 import {
   estimateShift,
   compensatedResidual,
@@ -74,6 +75,10 @@ const LANDMARK_FILE = resolve(TRACKER_DIR, "../data/landmarks.json");
 const LM_FIRST_DELAY_MS = 60_000;
 const LM_PERIOD_MS = 24 * 3600_000;
 const LM_RETRY_MS = 15 * 60_000;
+/** After an interruption: resume at the next idle gap, keeping the frames
+ *  already shot while they are this fresh. */
+const LM_RESUME_MS = 30_000;
+const LM_PARTIAL_MAX_AGE_MS = 30 * 60_000;
 /** Idle this long (no target) before taking the camera for ~40 s. */
 const LM_IDLE_MS = 20_000;
 /** Sun at least this high: the skyline needs daylight to correlate. */
@@ -128,6 +133,9 @@ const WRAP_SETTLE_SEC = 1.0;
 /** A broadcast detection that moves more than this fraction of the frame
  *  width between consecutive frames is held back until it persists. */
 const DET_HOP_FRAC = 0.08;
+/** Expected plane size (vision px, 480 wide) above which detections are
+ *  re-centred on the whole silhouette (vision/silhouette.ts). */
+const SILHOUETTE_MIN_PX = 14;
 /** Zoom debounce: how long a tighter / wider framing want must persist. */
 const ZOOM_IN_HOLD_MS = 600;
 const ZOOM_OUT_HOLD_MS = 600;
@@ -243,6 +251,9 @@ export class ControlLoop {
   private lmNextAt = Date.now() + LM_FIRST_DELAY_MS;
   /** Consecutive "shifted" applies without an "unchanged" confirmation. */
   private lmApplies = 0;
+  /** Frames already shot by an interrupted check — a busy sky rarely
+   *  leaves 40 idle seconds, so the next idle gap carries on from here. */
+  private lmPartial: { startedAt: number; refsAt: number | null; imgs: (Float64Array | null)[] } | null = null;
   private lmStatus: {
     lastCheckAt: number | null;
     lastVerdict: string | null;
@@ -600,16 +611,22 @@ export class ControlLoop {
       const set = this.landmarks.set;
       const hfov = hfovFromZoomUnits(cfg.units.zoomWideUnits, cfg.zoom.fovLut);
       const poses = set ? set.refs.map((r) => ({ panDeg: r.panDeg, tiltDeg: r.tiltDeg })) : this.landmarkPoses(cfg);
-      const imgs: (Float64Array | null)[] = [];
-      for (const p of poses) {
-        const img = await this.shootLandmark(p, cfg);
+      const refsAt = set?.capturedAt ?? null;
+      const partial = this.lmPartial;
+      const resume = partial && partial.refsAt === refsAt && startedAt - partial.startedAt < LM_PARTIAL_MAX_AGE_MS;
+      const imgs: (Float64Array | null)[] = resume ? partial.imgs : [];
+      this.lmPartial = { startedAt: resume ? partial.startedAt : startedAt, refsAt, imgs };
+      for (let i = imgs.length; i < poses.length; i++) {
+        const img = await this.shootLandmark(poses[i], cfg);
         if (img === undefined) {
-          this.lmNextAt = Date.now() + LM_RETRY_MS;
-          this.recorder.write("landmarks", { verdict: "aborted" });
+          // Interrupted by a target: keep what we have, carry on next gap.
+          this.lmNextAt = Date.now() + LM_RESUME_MS;
+          this.lmStatus.lastVerdict = `paused ${imgs.length}/${poses.length}`;
           return;
         }
         imgs.push(img);
       }
+      this.lmPartial = null;
       const now = Date.now();
       this.lmStatus.lastCheckAt = now;
       const capture = (model = cfg.mount): LandmarkSet => ({
@@ -1837,6 +1854,22 @@ export class ControlLoop {
             score: b.peakSigma,
           };
         });
+        // Big in frame: even merged, the motion blob is weighted toward
+        // whichever edges moved most this frame. Re-centre the strongest few
+        // on the plane's silhouette in the current frame, then drop the
+        // duplicates that re-centred onto the same aircraft.
+        if (thetaPx >= SILHOUETTE_MIN_PX) {
+          const refined: Detection[] = [];
+          for (const c of cands.slice(0, 3)) {
+            const sil = silhouetteCentroid(cur, VISION_W, VISION_H, c.cx, c.cy, thetaPx);
+            const r = sil ? { ...c, cx: sil.cx, cy: sil.cy, areaPx: sil.areaPx, box: sil.box } : c;
+            const dup = refined.some(
+              (o) => Math.hypot((o.cx - r.cx) * VISION_W, (o.cy - r.cy) * VISION_H) < 0.3 * thetaPx,
+            );
+            if (!dup) refined.push(r);
+          }
+          cands = [...refined, ...cands.slice(3)];
+        }
       }
       // Roll the frame buffer forward for the next tick's diff.
       this.prevLuma = cur;
