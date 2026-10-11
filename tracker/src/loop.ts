@@ -137,6 +137,8 @@ const WRAP_SETTLE_SEC = 1.0;
 /** A broadcast detection that moves more than this fraction of the frame
  *  width between consecutive frames is held back until it persists. */
 const DET_HOP_FRAC = 0.08;
+/** Fixed zoom stops near tele, HFOV deg (full tele first). */
+const TELE_STOPS_DEG = [4.04, 4.7, 5.55, 6.9, 8.7];
 /** Expected plane size (vision px, 480 wide) above which detections are
  *  re-centred on the whole silhouette (vision/silhouette.ts). */
 const SILHOUETTE_MIN_PX = 14;
@@ -1175,6 +1177,18 @@ export class ControlLoop {
         } else if (cur != null) {
           zoom.hfovDeg = cur;
           zoom.zoomUnits = zoomUnitsFromHfov(cur, cfg.zoom.fovLut);
+        }
+      }
+      // Zoom STOPS near tele: the lens's focus-tracking curve there is ~37
+      // focus units per zoom unit, so every small creep (1437→1429→1414…)
+      // knocked focus hundreds of units off. Snap to a few fixed zooms —
+      // never tighter than wanted, so the smoothness floors hold — each of
+      // which gets a well-learned focus (camera/focus.ts).
+      if (zoom.hfovDeg < TELE_STOPS_DEG[TELE_STOPS_DEG.length - 1] * 1.15) {
+        const stop = TELE_STOPS_DEG.find((h) => h >= zoom.hfovDeg * 0.97) ?? zoom.hfovDeg;
+        if (stop !== zoom.hfovDeg) {
+          zoom.hfovDeg = stop;
+          zoom.zoomUnits = zoomUnitsFromHfov(stop, cfg.zoom.fovLut);
         }
       }
       hfovDeg = zoom.hfovDeg;

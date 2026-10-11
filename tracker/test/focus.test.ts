@@ -33,9 +33,12 @@ describe("FocusController", () => {
     f.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 }); // learn
     expect(f.learned(1200)).toBe(-3870);
     // later the focus drifted and the plane is soft
-    f.update({ ...base, now: 5000, edgePx: 8, focusUnits: -2900 });
-    const acts = f.update({ ...base, now: 5800, edgePx: 8, focusUnits: -2900 });
-    expect(acts).toEqual([{ kind: "nudge", deltaUnits: -970, target: -3870 }]);
+    f.update({ ...base, now: 5000, edgePx: 8, focusUnits: -3600 });
+    const acts = f.update({ ...base, now: 5800, edgePx: 8, focusUnits: -3600 });
+    expect(acts).toEqual([{ kind: "nudge", deltaUnits: -270, target: -3870 }]);
+    // far off and locked: a one-push sweep beats a 10 s nudge
+    f.update({ ...base, now: 9000, edgePx: 8, focusUnits: -2900 });
+    expect(f.update({ ...base, now: 9800, edgePx: 8, focusUnits: -2900 })).toEqual([{ kind: "onePush" }]);
   });
 
   it("goes straight to the learned point when the zoom settles", () => {
@@ -43,8 +46,8 @@ describe("FocusController", () => {
     f.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 });
     f.update({ ...base, now: 3000, zoomedIn: false });
     f.update({ ...base, now: 4000, zoomSettled: false, focusUnits: -1000 });
-    const acts = f.update({ ...base, now: 5000, zoomSettled: true, focusUnits: -3500 });
-    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -370, target: -3870 });
+    const acts = f.update({ ...base, now: 5000, zoomSettled: true, focusUnits: -3600 });
+    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -270, target: -3870 });
   });
 
   it("one-push only when nothing is learned, rate-limited", () => {
