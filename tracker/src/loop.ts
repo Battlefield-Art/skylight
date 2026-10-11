@@ -1708,6 +1708,7 @@ export class ControlLoop {
           };
         }),
         autoCal: cfg.vision.autoCalibrate ? this.autoCal.status(cfg.mount) : undefined,
+        lensFocusUnits: this.driver().getFocusUnits?.() ?? null,
         focus: this.focusMetric
           ? { edgePx: this.focusMetric.edgePx, contrast: this.focusMetric.contrast, ageMs: now - this.focusMetric.t }
           : null,

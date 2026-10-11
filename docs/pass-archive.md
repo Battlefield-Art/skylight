@@ -111,8 +111,8 @@ Event kinds: `target lock lost zoom zenith wrap focus release`.
 {
   "t0": 1791676445000,                 // = startedAt (ms epoch)
   "hz": 10,
-  "cols": ["t","pan","tilt","cPan","cTilt","zoom","hfov","pAz","pEl","slant","dcx","dcy","dage","corrAz","corrEl","lead","fe"],
-  "rows": [[0.0, -61.1, 23.5, -57.4, 18.8, 0, 56.5, 122.3, 17.2, 9120, null, null, null, 0, 0, 0.5, null], ...]
+  "cols": ["t","pan","tilt","cPan","cTilt","zoom","hfov","pAz","pEl","slant","dcx","dcy","dage","corrAz","corrEl","lead","fe","fpos"],
+  "rows": [[0.0, -61.1, 23.5, -57.4, 18.8, 0, 56.5, 122.3, 17.2, 9120, null, null, null, 0, 0, 0.5, null, -1991], ...]
 }
 ```
 
@@ -121,7 +121,8 @@ Event kinds: `target lock lost zoom zenith wrap focus release`.
   centre in frame fractions (0–1, origin top-left); `dage` detection age ms; `corrAz/corrEl`
   applied vision correction (deg); `lead` seconds; `fe` focus edge width on the plane in
   full-res px (≈2–3 sharp at stream resolution, larger = softer; null when not zoomed in or
-  not measured — added 2026-10-11, absent from older series). Readers must look columns up
+  not measured); `fpos` lens focus position, signed raw camera units (≈ −2100…−100, larger = nearer) — both added
+  2026-10-11, absent from older series. Readers must look columns up
   by name: new columns are only ever appended.
 - Derived on the site: centring error az = `(dcx−0.5)·hfov`, el = `−(dcy−0.5)·hfov·9/16`
   (positive = plane above centre); pose error = `hypot((cPan−pan)·cos(tilt), cTilt−tilt)`.

@@ -63,6 +63,8 @@ export interface CameraDriver {
 
   /** Last pose reported by the camera (inquiry / integrator), or null. */
   getPose(): CameraPose | null;
+  /** Lens focus position, raw units (null = unknown / not supported). */
+  getFocusUnits?(): number | null;
 
   /**
    * How far the head currently lags (+) or leads (−) the smooth trajectory

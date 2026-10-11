@@ -293,6 +293,7 @@ export class PassArchive {
       corrEl: state.vision.correctionElDeg,
       lead: state.target.leadSec,
       fe: state.vision.focus && state.vision.focus.ageMs < 1000 ? state.vision.focus.edgePx : null,
+      fpos: state.vision.lensFocusUnits ?? null,
       gsKt: ac?.gs ?? null,
       altFt: ac?.altGeom ?? ac?.altBaro ?? null,
       baroRateFpm: ac?.baroRate ?? null,

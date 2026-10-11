@@ -731,9 +731,25 @@ export class ViscaCamera implements CameraDriver {
     }
   }
 
+  private inquiryCycle = 0;
+  private focusPos: { units: number; at: number } | null = null;
+
   private inquirePosition(): void {
     this.sendInquiry([0x81, 0x09, 0x06, 0x12, 0xff]); // pan/tilt position
-    this.sendInquiry([0x81, 0x09, 0x04, 0x47, 0xff]); // zoom position
+    // Focus and zoom answers are both `90 50 <4 nibbles> ff` and replies
+    // carry no usable seq, so focus gets its own cycle (every 4th, no zoom
+    // inquiry in it) and is told apart by value (zoom is 0..1437; this lens
+    // reports focus as 0xF7xx-0xFFxx, i.e. negative when read signed).
+    if (++this.inquiryCycle % 4 === 0) {
+      this.sendInquiry([0x81, 0x09, 0x04, 0x48, 0xff]); // focus position
+    } else {
+      this.sendInquiry([0x81, 0x09, 0x04, 0x47, 0xff]); // zoom position
+    }
+  }
+
+  /** Lens focus position (inquiry, signed raw units; larger = nearer). */
+  getFocusUnits(): number | null {
+    return this.focusPos && Date.now() - this.focusPos.at < 3000 ? this.focusPos.units : null;
   }
 
   private sendControlReset(): void {
@@ -798,7 +814,15 @@ export class ViscaCamera implements CameraDriver {
           zoomUnits: this.pose?.zoomUnits ?? 0,
         };
       } else if (payload.length === 7 && payload[payload.length - 1] === 0xff) {
-        const zoom = fromNibbles(payload.subarray(2, 6));
+        const v = fromNibbles(payload.subarray(2, 6));
+        const zoomMax = this.o.units.zoomTeleUnits ?? 1437;
+        // fromNibbles reads 16 bits signed: this lens's focus comes back as
+        // 0xF7xx-0xFFxx = about -2100..-100 (more negative = farther).
+        if (v < 0 || v > zoomMax + 64) {
+          this.focusPos = { units: v, at: Date.now() };
+          return;
+        }
+        const zoom = v;
         this.lastInquiryReply = Date.now();
         this.pose = {
           panDeg: this.pose?.panDeg ?? 0,
