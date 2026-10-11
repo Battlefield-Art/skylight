@@ -196,7 +196,7 @@ export class PassArchive {
           action: e.action,
           hfov: round1(e.hfov),
           label:
-            e.action === "onePush" ? "One-push autofocus" : "Autofocus lost the plane: infinity fallback",
+            e.action === "onePush" ? "One-push autofocus" : "Focus nudged to the learned point",
         });
         break;
     }

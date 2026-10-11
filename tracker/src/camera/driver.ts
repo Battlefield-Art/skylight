@@ -57,6 +57,10 @@ export interface CameraDriver {
    * focusing on the actual plane is the only reliable way to stay sharp.
    */
   onePushAutofocus(): void;
+  /** Manual focus without moving the lens (optional; VISCA only). */
+  focusManual?(): void;
+  /** Timed focus drive by about deltaUnits (+ = nearer) (optional). */
+  focusNudge?(deltaUnits: number): void;
 
   /** Stop all motion. */
   stopMotion(): void;

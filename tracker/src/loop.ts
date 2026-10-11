@@ -53,6 +53,7 @@ import { planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom } from "./pointing/zoom.js";
+import { FocusController } from "./camera/focus.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
 import { silhouetteCentroid } from "./vision/silhouette.js";
 import { measureSharpness } from "./vision/sharpness.js";
@@ -71,6 +72,7 @@ import type { VideoStream } from "./video/stream.js";
 const TRACKER_DIR = dirname(fileURLToPath(import.meta.url));
 const AUTOCAL_FILE = resolve(TRACKER_DIR, "../data/autocal.json");
 const LANDMARK_FILE = resolve(TRACKER_DIR, "../data/landmarks.json");
+const FOCUS_LUT_FILE = resolve(TRACKER_DIR, "../data/focus-lut.json");
 /** Landmark check cadence: first one shortly after start (a remount is
  *  usually followed by a restart), then daily; retries after a failed or
  *  aborted check. */
@@ -184,7 +186,7 @@ export type LoopEvent =
   | {
       kind: "focus";
       t: number;
-      action: "onePush" | "infinityFallback";
+      action: "onePush" | "nudge";
       zoom: number;
       hfov: number | null;
     };
@@ -248,6 +250,7 @@ export class ControlLoop {
   /** Continuous auto-calibration from locked passes. */
   private autoCal = new AutoCalibrator(AUTOCAL_FILE);
   private landmarks = new LandmarkStore(LANDMARK_FILE);
+  private focus = new FocusController(FOCUS_LUT_FILE);
   private lmRunning = false;
   private lmAbort = false;
   private lmNextAt = Date.now() + LM_FIRST_DELAY_MS;
@@ -282,8 +285,6 @@ export class ControlLoop {
   private wrapGoal = 0;
   /** Gear-aware zoom floor currently applied (0 = none); hysteresis state. */
   private gearFloorHfov = 0;
-  /** A one-push AF result is being held (don't override it with the far-stop). */
-  private focusHeld = false;
   /** Wall time of the most recent fresh detection (survives lastDetection = null). */
   private lastDetSeenAt = 0;
   /** This pass was classified as a zenith pass inbound (see zenithHold). */
@@ -320,13 +321,6 @@ export class ControlLoop {
   /** Zoom ladder rung (0 = full wide); climbs as vision lock sustains. */
   private ladderIdx = 0;
   private lastLadderAt = 0;
-  /** Focus-on-plane state: zoom units at the last one-push AF, and when.
-   *  lastFocusZoom: >0 = focused at that zoom; 0 = unfocused/reset; -1 = a sweep
-   *  failed and we fell back to the infinity stop (re-arm on the next clean frame). */
-  private lastFocusZoom = 0;
-  private lastFocusAt = 0;
-  /** When the last one-push AF was fired (0 = none pending a result check). */
-  private focusCheckAt = 0;
   /**
    * Recent aim/prediction history so vision can reference the pose AT FRAME
    * TIME — frames lag ~0.7 s, and measuring a blob in an old frame against
@@ -745,9 +739,6 @@ export class ControlLoop {
     this.zoomWantSince = 0;
     this.ladderIdx = 0;
     this.lastLadderAt = 0;
-    this.lastFocusZoom = 0;
-    this.lastFocusAt = 0;
-    this.focusCheckAt = 0;
     this.panRateI = 0;
     this.tiltRateI = 0;
     this.lastPanRateCmd = 0;
@@ -1190,79 +1181,38 @@ export class ControlLoop {
       angular = zoom.angularSizeDeg;
       commandedPanTilt = pt;
 
-      // Focus strategy:
-      //  - Zoomed in AND vision-locked on the plane: one-push autofocus ON
-      //    THE PLANE. The lens is not parfocal, so the fixed infinity far-stop
-      //    softens at high zoom; focusing on the actual subject is the only way
-      //    to stay sharp toward 20×. BUT fire the sweep only once the framing
-      //    has SETTLED (the zoom ladder isn't still stepping) and the plane is
-      //    sitting on the centre AF zone with the camera keeping up — a sweep
-      //    fired mid-ladder or with the plane off-centre makes contrast-AF lock
-      //    the blank sky / a passing cloud and rack the lens (the "can't find
-      //    focus at high zoom" hunt). After a sweep, if the plane is no longer
-      //    being detected the AF defocused it, so fall back to the infinity
-      //    far-stop: stable and only mildly soft, never hunting. Re-arm on the
-      //    next clean, centred frame.
-      //  - Otherwise: infinity far-stop when meaningfully zoomed (a long lens
-      //    on open sky makes autofocus hunt), autofocus at wide (hyperfocal
-      //    depth covers everything and the plane is too small to lock).
-      const zoomedIn = zoom.hfovDeg < 25;
+      // Focus (camera/focus.ts): manual hold while zoomed in — the camera's
+      // own zoom tracking carries the wide infinity point to sharp at tele —
+      // corrected by measurement: soft on the plane → nudge to the focus
+      // learned for this zoom; one-push only where nothing is learned yet.
       const fdet = this.lastDetection;
       const fFresh = fdet != null && now - fdet.t < 1000;
       const fCentered =
         fFresh && Math.abs(fdet.cx - 0.5) < 0.18 && Math.abs(fdet.cy - 0.5) < 0.18;
-      const fZoomSettled = now - this.lastLadderAt > 1200; // ladder not stepping
+      const lensZoom = d.getPose()?.zoomUnits ?? zoom.zoomUnits;
+      const fZoomSettled =
+        now - this.lastLadderAt > 800 && Math.abs(lensZoom - zoom.zoomUnits) < 12;
       const fSteady = lagDeg < Math.max(0.4 * hfovDeg, 0.5); // camera keeping up
-      if (zoomedIn && visionLocked && cfg.vision.autofocusOnZoom) {
-        const zoomChanged = Math.abs(zoom.zoomUnits - this.lastFocusZoom) > 120;
-        const wantFocus = this.lastFocusZoom <= 0 || zoomChanged;
-        // Never sit in continuous AF while zoomed in: until a one-push result
-        // is being held, the lens stays on the infinity far-stop. (Before,
-        // this branch sent nothing until a sweep fired — and the sweep's
-        // preconditions rarely lined up — so a lock carried up from wide
-        // kept the AUTO mode set at wide and the camera hunted at tele.)
-        if (!this.focusHeld) d.setFocusInfinity(true);
-        if (
-          wantFocus && fCentered && fSteady && fZoomSettled &&
-          now - this.lastFocusAt > 2000
-        ) {
-          d.onePushAutofocus();
-          this.focusHeld = true;
-          this.lastFocusZoom = zoom.zoomUnits;
-          this.lastFocusAt = now;
-          this.focusCheckAt = now;
-          this.recorder.write("focus", { action: "onePush", zoom: zoom.zoomUnits, hfov: hfovDeg });
-          this.emit({ kind: "focus", t: now, action: "onePush", zoom: zoom.zoomUnits, hfov: hfovDeg });
-        } else if (this.focusCheckAt > 0 && now - this.focusCheckAt > 2500) {
-          // The sweep has had time to settle; if the plane dropped out of
-          // detection the AF lost it — park at infinity and re-arm.
-          if (!fFresh) {
-            this.focusHeld = false;
-            d.setFocusInfinity(true);
-            this.lastFocusZoom = -1;
-            this.recorder.write("focus", { action: "infinityFallback", zoom: zoom.zoomUnits, hfov: hfovDeg });
-            this.emit({ kind: "focus", t: now, action: "infinityFallback", zoom: zoom.zoomUnits, hfov: hfovDeg });
-          }
-          this.focusCheckAt = 0;
+      const fm = this.focusMetric;
+      const focusActs = this.focus.update({
+        now,
+        zoomedIn: zoom.hfovDeg < 25,
+        zoomUnits: lensZoom,
+        zoomSettled: fZoomSettled,
+        locked: visionLocked && fCentered && fSteady,
+        edgePx: fm && now - fm.t < 700 ? fm.edgePx : null,
+        focusUnits: d.getFocusUnits?.() ?? null,
+      });
+      for (const a of focusActs) {
+        if (a.kind === "auto") d.setFocusInfinity(false);
+        else if (a.kind === "manual") d.focusManual ? d.focusManual() : d.setFocusInfinity(true);
+        else if (a.kind === "nudge") d.focusNudge?.(a.deltaUnits);
+        else if (a.kind === "onePush" && cfg.vision.autofocusOnZoom) d.onePushAutofocus();
+        if (a.kind === "nudge" || a.kind === "onePush") {
+          const extra = a.kind === "nudge" ? { delta: Math.round(a.deltaUnits), target: Math.round(a.target) } : {};
+          this.recorder.write("focus", { action: a.kind, zoom: lensZoom, hfov: hfovDeg, ...extra });
+          this.emit({ kind: "focus", t: now, action: a.kind, zoom: lensZoom, hfov: hfovDeg });
         }
-      } else if (zoomedIn && this.focusHeld) {
-        // A one-push result is held and we are still zoomed in: a brief lock
-        // flicker must NOT drive the lens back to the far stop and re-arm a
-        // sweep (ACA568: 8 sweeps in one pass, each a visible blur). Fall
-        // back to the far stop only after a sustained loss of the plane.
-        if (now - this.lastDetSeenAt > 2500) {
-          this.focusHeld = false;
-          d.setFocusInfinity(true);
-          this.lastFocusZoom = -1;
-          this.recorder.write("focus", { action: "infinityFallback", zoom: zoom.zoomUnits, hfov: hfovDeg, reason: "lost" });
-          this.emit({ kind: "focus", t: now, action: "infinityFallback", zoom: zoom.zoomUnits, hfov: hfovDeg });
-        }
-        this.focusCheckAt = 0;
-      } else {
-        this.focusHeld = false;
-        d.setFocusInfinity(zoomedIn);
-        this.lastFocusZoom = 0; // re-arm one-push AF for the next lock
-        this.focusCheckAt = 0;
       }
 
       const cmd: CameraPose = { ...pt, zoomUnits: zoom.zoomUnits };

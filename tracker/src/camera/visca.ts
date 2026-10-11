@@ -515,7 +515,7 @@ export class ViscaCamera implements CameraDriver {
 
   /** Focus state: null = unknown (assert on first call). "onepush" means a
    *  one-push AF sweep is the active mode (distinct from steady infinity). */
-  private focusMode: "infinity" | "auto" | "onepush" | null = null;
+  private focusMode: "infinity" | "auto" | "onepush" | "manual" | null = null;
   private focusFarTimer: ReturnType<typeof setTimeout> | null = null;
 
   setFocusInfinity(on: boolean): void {
@@ -536,6 +536,32 @@ export class ViscaCamera implements CameraDriver {
       this.sendCommand([0x81, 0x01, 0x04, 0x08, 0x00, 0xff]); // focus stop
       this.sendCommand([0x81, 0x01, 0x04, 0x38, 0x02, 0xff]); // auto focus
     }
+  }
+
+  /** Manual focus, lens left where it is (the camera keeps zoom-tracking). */
+  focusManual(): void {
+    if (this.focusFarTimer) { clearTimeout(this.focusFarTimer); this.focusFarTimer = null; }
+    if (this.focusMode === "manual") return;
+    this.focusMode = "manual";
+    this.sendCommand([0x81, 0x01, 0x04, 0x38, 0x03, 0xff]);
+  }
+
+  /**
+   * Move focus by about `deltaUnits` (signed raw units, + = nearer) with a
+   * timed speed-7 drive — Focus Direct is ignored by this firmware. Rates
+   * measured at full tele: near ≈ 94 u/s, far ≈ 80 u/s.
+   */
+  focusNudge(deltaUnits: number): void {
+    if (this.focusFarTimer) { clearTimeout(this.focusFarTimer); this.focusFarTimer = null; }
+    if (this.focusMode !== "manual") this.sendCommand([0x81, 0x01, 0x04, 0x38, 0x03, 0xff]);
+    this.focusMode = "manual";
+    const near = deltaUnits > 0;
+    const ms = Math.min(3000, Math.max(60, (Math.abs(deltaUnits) / (near ? 94 : 80)) * 1000));
+    this.sendCommand([0x81, 0x01, 0x04, 0x08, near ? 0x37 : 0x27, 0xff]);
+    this.focusFarTimer = setTimeout(() => {
+      this.focusFarTimer = null;
+      this.sendCommand([0x81, 0x01, 0x04, 0x08, 0x00, 0xff]); // focus stop
+    }, ms);
   }
 
   onePushAutofocus(): void {
