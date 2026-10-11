@@ -12,7 +12,7 @@
 //  - Focus Direct (`81 01 04 48`) is ignored; far/near drives at speed 7
 //    move ≈ 80-95 units/s.
 //
-// So: hold manual focus while zoomed in; measure sharpness on the plane
+// So: hold manual focus while tracking; measure sharpness on the plane
 // (vision/sharpness.ts edge width); learn the sharp focus position per zoom;
 // when soft, NUDGE straight to the learned position. One-push only when
 // nothing has been learned for this zoom yet.
@@ -41,11 +41,16 @@ export const NUDGE_MIN_UNITS = 30;
 const SOFT_HOLD_MS = 700;
 const ACTION_COOLDOWN_MS = 1500;
 const ONEPUSH_COOLDOWN_MS = 8000;
-const LEARN_ALPHA = 0.3;
+/** Slow: sharp samples spread across a ~300-unit depth-of-field zone at
+ *  tele; a fast average walked to its far edge (−4142 at 1437). */
+const LEARN_ALPHA = 0.08;
 
 export interface FocusInput {
   now: number;
-  /** Meaningfully zoomed in (manual focus regime). */
+  /** Manual-focus regime: a target is being tracked. Manual from the moment
+   *  a target is picked, before any zoom — continuous AF left on while the
+   *  zoom climbed hunted on blank sky, and the camera's zoom tracking then
+   *  carried that error up to tele (SKW3462 arrived 1000 units off). */
   zoomedIn: boolean;
   zoomUnits: number;
   /** The zoom ladder isn't stepping (the lens is at its final zoom). */
@@ -104,8 +109,8 @@ export class FocusController {
   update(i: FocusInput): FocusAction[] {
     const out: FocusAction[] = [];
     if (!i.zoomedIn) {
-      // Wide: continuous AF is fine (hyperfocal), and it parks focus on the
-      // wide infinity point the zoom tracking starts from.
+      // Idle at home: continuous AF on the scenery parks focus on the wide
+      // infinity point the zoom tracking starts from.
       if (this.mode !== "auto") { this.mode = "auto"; out.push({ kind: "auto" }); }
       this.softSince = null;
       this.wasSettled = false;
@@ -158,8 +163,7 @@ export class FocusController {
     if (!e) this.lut.set(b, { focus, edgePx, n: 1, at: now });
     else {
       // Weight sharper observations more.
-      const a = edgePx < e.edgePx ? Math.min(0.6, LEARN_ALPHA * 1.5) : LEARN_ALPHA;
-      e.focus = e.focus + a * (focus - e.focus);
+      e.focus = e.focus + LEARN_ALPHA * (focus - e.focus);
       e.edgePx = e.edgePx + 0.3 * (edgePx - e.edgePx);
       e.n++;
       e.at = now;

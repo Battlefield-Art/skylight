@@ -1196,7 +1196,7 @@ export class ControlLoop {
       const fm = this.focusMetric;
       const focusActs = this.focus.update({
         now,
-        zoomedIn: zoom.hfovDeg < 25,
+        zoomedIn: true, // tracking: manual focus from the first tick
         zoomUnits: lensZoom,
         zoomSettled: fZoomSettled,
         locked: visionLocked && fCentered && fSteady,
@@ -1516,6 +1516,14 @@ export class ControlLoop {
       this.driver().gotoAbsolute({ ...pt, zoomUnits: cfg.units.zoomWideUnits });
       this.driver().setFocusInfinity(false); // wide + idle -> autofocus
       this.recorder.write("home", { azDeg, elDeg: cfg.home.elDeg });
+    }
+
+    // No target: hand focus back to AF (on the scenery, wide) so the next
+    // pass's zoom tracking starts from the wide infinity point.
+    if (!prediction) {
+      for (const a of this.focus.update({
+        now, zoomedIn: false, zoomUnits: 0, zoomSettled: false, locked: false, edgePx: null, focusUnits: null,
+      })) if (a.kind === "auto") this.driver().setFocusInfinity(false);
     }
 
     // Landmark re-calibration: borrow the idle camera in daylight.
