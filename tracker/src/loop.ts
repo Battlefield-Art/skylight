@@ -608,7 +608,13 @@ export class ControlLoop {
     const cfg = this.cfg();
     const startedAt = Date.now();
     try {
-      const set = this.landmarks.set;
+      // A pan offset far from the references' model means the base was
+      // deliberately re-aimed and the offset entered by hand: the stored
+      // poses now look elsewhere, so shoot a fresh set instead of comparing.
+      const stored = this.landmarks.set;
+      const reaimed =
+        stored != null && Math.abs(norm180(cfg.mount.panOffsetDeg - stored.model.panOffsetDeg)) > 20;
+      const set = reaimed ? null : stored;
       const hfov = hfovFromZoomUnits(cfg.units.zoomWideUnits, cfg.zoom.fovLut);
       const poses = set ? set.refs.map((r) => ({ panDeg: r.panDeg, tiltDeg: r.tiltDeg })) : this.landmarkPoses(cfg);
       const refsAt = set?.capturedAt ?? null;
