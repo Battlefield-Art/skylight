@@ -1215,6 +1215,9 @@ export class ControlLoop {
       const fFresh = fdet != null && now - fdet.t < 1000;
       const fCentered =
         fFresh && Math.abs(fdet.cx - 0.5) < 0.18 && Math.abs(fdet.cy - 0.5) < 0.18;
+      const fCenteredLoose =
+        fFresh && Math.abs(fdet.cx - 0.5) < 0.28 && Math.abs(fdet.cy - 0.5) < 0.28;
+      const bigInFrame = angular != null && (angular / Math.max(0.5, zoom.hfovDeg)) * 1280 >= 120;
       const lensZoom = d.getPose()?.zoomUnits ?? zoom.zoomUnits;
       const fZoomSettled =
         now - this.lastLadderAt > 800 && Math.abs(lensZoom - zoom.zoomUnits) < 12;
@@ -1227,7 +1230,10 @@ export class ControlLoop {
         zoomSettled: fZoomSettled,
         locked: visionLocked && fCentered && fSteady,
         detected: fFresh,
-        sweepOk: fSteady && (fCentered || !fFresh),
+        // A big (close) plane overlaps the camera's centre-weighted AF zone
+        // well off-centre; a strict ±18% window kept SKW5920 (300 px, 2 km)
+        // from ever getting a sweep while it sat in blur for 5 s.
+        sweepOk: fSteady && (fCentered || !fFresh || (fCenteredLoose && bigInFrame)),
         targetPx: angular != null ? (angular / Math.max(0.5, zoom.hfovDeg)) * 1280 : null,
         commandedZoom: zoom.zoomUnits,
         slantM: prediction?.azEl.slantM ?? null,
