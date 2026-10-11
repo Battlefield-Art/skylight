@@ -41,6 +41,13 @@ export const NUDGE_MIN_UNITS = 30;
 /** Beyond this a nudge takes >4 s at ~85 u/s; a one-push sweep with the
  *  plane centred lands in ~1-3 s (UAL2317: 1.2 s), so use that instead. */
 export const ONEPUSH_ABOVE_UNITS = 350;
+/** Pass-start far-stop reference only while this wide. */
+export const WIDE_REFERENCE_MAX_ZOOM = 400;
+/** The camera keeps moving focus for ~6 s after a zoom change (its zoom
+ *  tracking catching up): judge / nudge only once the lens has been still
+ *  this long (within FOCUS_STILL_UNITS). */
+const FOCUS_STILL_MS = 800;
+const FOCUS_STILL_UNITS = 20;
 /** One-push only when the plane spans at least this many full-res px. */
 export const SWEEP_MIN_TARGET_PX = 60;
 const SOFT_HOLD_MS = 700;
@@ -81,6 +88,9 @@ export interface FocusInput {
 export type FocusAction =
   | { kind: "auto" }
   | { kind: "manual" }
+  /** Drive to the far stop (wide, at pass start): a known focus DISTANCE
+   *  for the camera's zoom tracking to carry up to tele. */
+  | { kind: "farReference" }
   | { kind: "nudge"; deltaUnits: number; target: number }
   | { kind: "onePush" };
 
@@ -93,6 +103,7 @@ export class FocusController {
   private lastActionAt = -Infinity;
   private lastOnePushAt = -Infinity;
   private wasSettled = false;
+  private focusHist: { t: number; f: number }[] = [];
   private dirty = false;
   private lastSaveAt = 0;
 
@@ -129,7 +140,18 @@ export class FocusController {
       this.wasSettled = false;
       return out;
     }
-    if (this.mode !== "manual") { this.mode = "manual"; out.push({ kind: "manual" }); }
+    if (this.mode !== "manual") {
+      this.mode = "manual";
+      // In manual focus the camera's zoom tracking preserves the focus
+      // DISTANCE. Idle AF at wide picked whatever was in view — roofs and
+      // trees ~100 m away — and at 20× that is hundreds to 1400 units from
+      // infinity (arrivals were randomly 600-1400 off). Reset the distance to
+      // the far stop while still wide (cheap, invisible at wide): tracking
+      // then lands near the tele far stop, a fixed ~250 units from sharp.
+      if (i.zoomUnits < WIDE_REFERENCE_MAX_ZOOM) out.push({ kind: "farReference" });
+      else out.push({ kind: "manual" });
+      this.focusHist = [];
+    }
 
     const target = this.learned(i.zoomUnits);
     const sharp = i.edgePx != null && i.edgePx <= FE_SHARP;
@@ -142,9 +164,19 @@ export class FocusController {
     ) this.learn(i.zoomUnits, i.focusUnits, i.edgePx!, i.now);
 
     this.softSince = soft ? (this.softSince ?? i.now) : null;
-    const justSettled = i.zoomSettled && !this.wasSettled;
-    this.wasSettled = i.zoomSettled;
-    if (!i.zoomSettled || i.now - this.lastActionAt < ACTION_COOLDOWN_MS) return out;
+    if (i.focusUnits != null) {
+      this.focusHist.push({ t: i.now, f: i.focusUnits });
+      while (this.focusHist.length && i.now - this.focusHist[0].t > 3000) this.focusHist.shift();
+    }
+    const recent = this.focusHist.filter((h) => i.now - h.t <= FOCUS_STILL_MS);
+    const still =
+      recent.length >= 2 &&
+      i.now - this.focusHist[0].t >= FOCUS_STILL_MS &&
+      Math.max(...recent.map((h) => h.f)) - Math.min(...recent.map((h) => h.f)) <= FOCUS_STILL_UNITS;
+    const settled = i.zoomSettled && still;
+    const justSettled = settled && !this.wasSettled;
+    this.wasSettled = settled;
+    if (!settled || i.now - this.lastActionAt < ACTION_COOLDOWN_MS) return out;
 
     const off = target != null && i.focusUnits != null ? target - i.focusUnits : null;
     // Distant/high planes are a few dozen pixels: the camera's contrast AF

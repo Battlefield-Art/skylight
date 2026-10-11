@@ -1235,6 +1235,7 @@ export class ControlLoop {
       for (const a of focusActs) {
         if (a.kind === "auto") d.setFocusInfinity(false);
         else if (a.kind === "manual") d.focusManual ? d.focusManual() : d.setFocusInfinity(true);
+        else if (a.kind === "farReference") d.setFocusInfinity(true); // manual + drive to the far stop
         else if (a.kind === "nudge") d.focusNudge?.(a.deltaUnits);
         else if (a.kind === "onePush" && cfg.vision.autofocusOnZoom) d.onePushAutofocus();
         if (a.kind === "nudge" || a.kind === "onePush") {
