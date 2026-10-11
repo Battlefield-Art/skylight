@@ -52,6 +52,14 @@ const FOCUS_STILL_UNITS = 20;
 export const SWEEP_MIN_TARGET_PX = 60;
 const SOFT_HOLD_MS = 700;
 const ACTION_COOLDOWN_MS = 1500;
+/** Servo: short bursts toward the learned point, re-reading in between
+ *  (focus drives top out at ~100 u/s — speed bytes above 7 are ignored —
+ *  so starting early, during the camera's own tracking settle, is the
+ *  only way to save time). */
+const SERVO_BURST_UNITS = 60;
+const SERVO_GAP_MS = 250;
+/** Servo only on the final approach to the commanded stop. */
+const SERVO_ZOOM_TOL = 30;
 const ONEPUSH_COOLDOWN_MS = 8000;
 /** Slow: sharp samples spread across a ~300-unit depth-of-field zone at
  *  tele; a fast average walked to its far edge (−4142 at 1437). */
@@ -75,6 +83,8 @@ export interface FocusInput {
    *  to see), the aim settled on the prediction — the camera's centre-
    *  weighted one-push AF will find it (gates sweeps). */
   sweepOk?: boolean;
+  /** Zoom being commanded (the stop the lens is heading for). */
+  commandedZoom?: number;
   /** Expected plane size across the frame, full-res px (null = unknown). */
   targetPx?: number | null;
   /** Latest sharpness measurement on the plane, if fresh. */
@@ -104,6 +114,7 @@ export class FocusController {
   private lastOnePushAt = -Infinity;
   private wasSettled = false;
   private focusHist: { t: number; f: number }[] = [];
+  private servoUntil = 0;
   private dirty = false;
   private lastSaveAt = 0;
 
@@ -176,9 +187,29 @@ export class FocusController {
     const settled = i.zoomSettled && still;
     const justSettled = settled && !this.wasSettled;
     this.wasSettled = settled;
+
+    // Continuous servo on the final approach: bursts toward the point learned
+    // for the commanded stop, without waiting for the lens to settle.
+    const cz = i.commandedZoom ?? i.zoomUnits;
+    const servoTarget = Math.abs(i.zoomUnits - cz) <= SERVO_ZOOM_TOL ? this.learned(cz) : null;
+    if (servoTarget != null && i.focusUnits != null && i.now >= this.servoUntil) {
+      const err = servoTarget - i.focusUnits;
+      const big = Math.abs(err) > ONEPUSH_ABOVE_UNITS;
+      const sweepNow = big && settled && (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX &&
+        (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+      if (!sweepNow && Math.abs(err) > NUDGE_MIN_UNITS) {
+        const step = Math.sign(err) * Math.min(Math.abs(err), SERVO_BURST_UNITS);
+        this.servoUntil = i.now + (Math.abs(step) / 90) * 1000 + SERVO_GAP_MS;
+        this.lastActionAt = i.now;
+        out.push({ kind: "nudge", deltaUnits: step, target: servoTarget });
+        return out;
+      }
+    }
     if (!settled || i.now - this.lastActionAt < ACTION_COOLDOWN_MS) return out;
 
     const off = target != null && i.focusUnits != null ? target - i.focusUnits : null;
+    // Settled far from the learned point with a plane the AF can see: sweep
+    // (the servo leaves these to the one-push; ~1-3 s vs 4+ s of driving).
     // Distant/high planes are a few dozen pixels: the camera's contrast AF
     // can't see them and racks focus off into blur (the "high planes go out
     // of focus and get lost" pattern). Sweeps only for planes big enough to
@@ -186,6 +217,12 @@ export class FocusController {
     // point, which is right for them anyway (deep depth of field at range).
     const bigEnough = (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX;
     const canSweep = bigEnough && (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+    if (off != null && Math.abs(off) > ONEPUSH_ABOVE_UNITS && canSweep) {
+      this.lastActionAt = i.now;
+      this.lastOnePushAt = i.now;
+      out.push({ kind: "onePush" });
+      return out;
+    }
     // Arriving at a zoom we know: go straight to the learned point.
     if (justSettled && off != null && Math.abs(off) > 2 * NUDGE_MIN_UNITS) {
       this.lastActionAt = i.now;

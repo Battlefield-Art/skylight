@@ -839,7 +839,9 @@ export class ViscaCamera implements CameraDriver {
     // a later question.
     const now = Date.now();
     if (this.pending7 && now - this.pending7.at < 300) return;
-    if (++this.inquiryCycle % 4 === 0) {
+    // Zoomed in, focus is servoed: ask for it every other cycle.
+    const focusEvery = (this.pose?.zoomUnits ?? 0) >= 900 ? 2 : 4;
+    if (++this.inquiryCycle % focusEvery === 0) {
       this.pending7 = { kind: "focus", at: now };
       this.sendInquiry([0x81, 0x09, 0x04, 0x48, 0xff]); // focus position
     } else {

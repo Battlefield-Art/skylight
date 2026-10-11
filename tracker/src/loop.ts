@@ -1228,6 +1228,7 @@ export class ControlLoop {
         detected: fFresh,
         sweepOk: fSteady && (fCentered || !fFresh),
         targetPx: angular != null ? (angular / Math.max(0.5, zoom.hfovDeg)) * 1280 : null,
+        commandedZoom: zoom.zoomUnits,
         edgePx: fm && now - fm.t < 700 ? fm.edgePx : null,
         edgeContrast: fm?.contrast ?? null,
         focusUnits: d.getFocusUnits?.() ?? null,

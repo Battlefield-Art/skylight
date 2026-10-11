@@ -40,25 +40,28 @@ describe("FocusController", () => {
     f.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 }); // learn
     expect(f.learned(1200)).toBe(-3870);
     // later the focus drifted and the plane is soft
-    f.update({ ...base, now: 5000, edgePx: 8, focusUnits: -3600 });
-    const acts = f.update({ ...base, now: 5800, edgePx: 8, focusUnits: -3600 });
-    expect(acts).toEqual([{ kind: "nudge", deltaUnits: -270, target: -3870 }]);
-    // far off and locked: a one-push sweep beats a 10 s nudge
-    f.update({ ...base, now: 9000, edgePx: 8, focusUnits: -2900 });
-    expect(f.update({ ...base, now: 9800, edgePx: 8, focusUnits: -2900 })).toEqual([{ kind: "onePush" }]);
+    // later the lens is 270 off: the servo bursts straight toward it
+    const acts = f.update({ ...base, now: 5000, edgePx: 8, focusUnits: -3600 });
+    expect(acts).toEqual([{ kind: "nudge", deltaUnits: -60, target: -3870 }]);
+    // far off, locked, lens settled: a one-push sweep beats a 10 s drive
+    const g = new FocusController(null, false);
+    g.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 });
+    const b = run(g, { ...base, edgePx: 8, focusUnits: -2900 }, 9000, 11000);
+    expect(b).toContainEqual({ kind: "onePush" });
   });
 
-  it("goes straight to the learned point once zoom AND lens have settled", () => {
+  it("servos toward the commanded stop's learned point during the final approach", () => {
     const f = new FocusController();
-    f.update({ ...base, now: 0, edgePx: 2.4, focusUnits: -3870 });
-    f.update({ ...base, now: 3000, zoomedIn: false });
-    // zoom tracking still moving the lens: nothing yet
-    expect(run(f, { ...base, zoomSettled: true, focusUnits: -3000 }, 4000, 4000)).not.toContainEqual(
+    // still zooming (lens 200 short of the stop): no servo yet
+    expect(f.update({ ...base, zoomUnits: 1237, commandedZoom: 1437, focusUnits: -1000 })).not.toContainEqual(
       expect.objectContaining({ kind: "nudge" }));
-    f.update({ ...base, now: 4200, focusUnits: -3400 });
-    // still at -3600 for a while → one nudge to the learned point
-    const acts = run(f, { ...base, focusUnits: -3600 }, 4400, 6000);
-    expect(acts.filter((a) => a.kind === "nudge")).toEqual([{ kind: "nudge", deltaUnits: -270, target: -3870 }]);
+    // within 30 of the stop: bursts even while the lens is still moving
+    const a = f.update({ ...base, now: 300, zoomUnits: 1420, commandedZoom: 1437, focusUnits: -3300 });
+    expect(a).toEqual([{ kind: "nudge", deltaUnits: -60, target: -3870 }]);
+    // next burst only after it has run + a gap
+    expect(f.update({ ...base, now: 500, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3360 })).toEqual([]);
+    expect(f.update({ ...base, now: 1300, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3700 })).toContainEqual(
+      { kind: "nudge", deltaUnits: -60, target: -3870 });
   });
 
   it("one-push only when nothing is learned, rate-limited", () => {
@@ -74,7 +77,7 @@ describe("FocusController gating", () => {
   it("nudges a detected-but-off-centre soft plane; sweeps an undetectably soft one", () => {
     const f = new FocusController();
     const acts = run(f, { ...base, zoomUnits: 1437, locked: false, detected: true, edgePx: 6, focusUnits: -3700 }, 0, 1600);
-    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -170, target: -3870 });
+    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -60, target: -3870 });
     const g = new FocusController();
     const b = run(g, { ...base, zoomUnits: 1437, locked: false, detected: false, sweepOk: true, focusUnits: -3200 }, 0, 1600);
     expect(b).toContainEqual({ kind: "onePush" });
@@ -86,7 +89,7 @@ describe("FocusController by target size", () => {
     const f = new FocusController();
     const acts = run(f, { ...base, zoomUnits: 1437, locked: false, detected: false, sweepOk: true, targetPx: 25, focusUnits: -3200 }, 0, 1600);
     expect(acts).not.toContainEqual({ kind: "onePush" });
-    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -670, target: -3870 });
+    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -60, target: -3870 });
   });
 
   it("resets the focus distance to the far stop when a pass starts wide", () => {
