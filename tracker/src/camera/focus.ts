@@ -30,7 +30,15 @@ export const FE_SOFT = 4.0;
  *  (A 32-unit bucket with neighbour fallback nudged a 1437 plane to the
  *  focus learned at 1404 — 1700 units off — and blurred a whole pass.) */
 export const LUT_BUCKET = 4;
-/** Seed: full tele, measured sharp at −3857…−3905 on two passes + probe. */
+/** Distance bands (slant range, m): at 20× a plane 2 km away needs a
+ *  visibly nearer focus than one at 8 km (LOT35 at ~2.5 km stayed a blur
+ *  at the far-band point −3722). Keys are bucket*10 + band. */
+export const BAND_EDGES_M = [2500, 5000];
+export function distanceBand(slantM: number | null | undefined): number {
+  if (slantM == null) return 2;
+  return slantM < BAND_EDGES_M[0] ? 0 : slantM < BAND_EDGES_M[1] ? 1 : 2;
+}
+/** Seed: full tele, far band, measured sharp at −3857…−3905 (two passes + probe). */
 export const TELE_SEED: [number, number] = [1437, -3870];
 /** Believable measurements only: sub-pixel edges are compression/tiny-plane
  *  artefacts, low contrast is haze. */
@@ -83,6 +91,8 @@ export interface FocusInput {
    *  to see), the aim settled on the prediction — the camera's centre-
    *  weighted one-push AF will find it (gates sweeps). */
   sweepOk?: boolean;
+  /** Slant range to the plane, m (selects the distance band). */
+  slantM?: number | null;
   /** Zoom being commanded (the stop the lens is heading for). */
   commandedZoom?: number;
   /** Expected plane size across the frame, full-res px (null = unknown). */
@@ -115,25 +125,33 @@ export class FocusController {
   private wasSettled = false;
   private focusHist: { t: number; f: number }[] = [];
   private servoUntil = 0;
+  /** Last decision, for state/debugging. */
+  debug: Record<string, number | boolean | string | null> = {};
   private dirty = false;
   private lastSaveAt = 0;
 
   constructor(private file: string | null = null, seed = true) {
     if (file) {
       try {
-        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { bucket?: number; lut?: Record<string, LutEntry> };
-        if (raw.bucket === LUT_BUCKET && raw.lut) for (const [k, v] of Object.entries(raw.lut)) this.lut.set(Number(k), v);
+        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { bucket?: number; bands?: number; lut?: Record<string, LutEntry> };
+        if (raw.bucket === LUT_BUCKET && raw.bands === BAND_EDGES_M.length + 1 && raw.lut) {
+          for (const [k, v] of Object.entries(raw.lut)) this.lut.set(Number(k), v);
+        } else if (raw.bucket === LUT_BUCKET && raw.lut) {
+          // v1 (zoom only): those values were learned mostly on distant planes.
+          for (const [k, v] of Object.entries(raw.lut)) this.lut.set(Number(k) * 10 + 2, v);
+        }
       } catch {
         /* first run */
       }
     }
-    const tb = Math.round(TELE_SEED[0] / LUT_BUCKET);
+    const tb = Math.round(TELE_SEED[0] / LUT_BUCKET) * 10 + 2;
     if (seed && !this.lut.has(tb)) this.lut.set(tb, { focus: TELE_SEED[1], edgePx: 3, n: 0, at: 0 });
   }
 
-  /** Learned sharp focus for exactly this zoom (its 4-unit bucket). */
-  learned(zoomUnits: number): number | null {
-    return this.lut.get(Math.round(zoomUnits / LUT_BUCKET))?.focus ?? null;
+  /** Learned sharp focus for exactly this zoom (its 4-unit bucket) and
+   *  distance band (default: far). */
+  learned(zoomUnits: number, band = 2): number | null {
+    return this.lut.get(Math.round(zoomUnits / LUT_BUCKET) * 10 + band)?.focus ?? null;
   }
 
   table(): Record<number, LutEntry> {
@@ -164,7 +182,8 @@ export class FocusController {
       this.focusHist = [];
     }
 
-    const target = this.learned(i.zoomUnits);
+    const band = distanceBand(i.slantM);
+    const target = this.learned(i.zoomUnits, band);
     const sharp = i.edgePx != null && i.edgePx <= FE_SHARP;
     const soft = i.edgePx != null && i.edgePx > FE_SOFT;
 
@@ -172,7 +191,7 @@ export class FocusController {
     if (
       sharp && i.edgePx! >= LEARN_MIN_EDGE && (i.edgeContrast ?? 0) >= LEARN_MIN_CONTRAST &&
       i.zoomSettled && i.locked && i.focusUnits != null
-    ) this.learn(i.zoomUnits, i.focusUnits, i.edgePx!, i.now);
+    ) this.learn(i.zoomUnits, band, i.focusUnits, i.edgePx!, i.now);
 
     this.softSince = soft ? (this.softSince ?? i.now) : null;
     if (i.focusUnits != null) {
@@ -191,14 +210,30 @@ export class FocusController {
     // Continuous servo on the final approach: bursts toward the point learned
     // for the commanded stop, without waiting for the lens to settle.
     const cz = i.commandedZoom ?? i.zoomUnits;
-    const servoTarget = Math.abs(i.zoomUnits - cz) <= SERVO_ZOOM_TOL ? this.learned(cz) : null;
+    const servoTarget = Math.abs(i.zoomUnits - cz) <= SERVO_ZOOM_TOL ? this.learned(cz, band) : null;
+    this.debug = {
+      lens: i.zoomUnits, cz, target: servoTarget, focus: i.focusUnits, settled, still,
+      zoomSettled: i.zoomSettled, servoWaitMs: Math.max(0, this.servoUntil - i.now),
+      sweepOk: i.sweepOk ?? null, detected: i.detected ?? null, targetPx: i.targetPx ?? null,
+      edge: i.edgePx,
+    };
     if (servoTarget != null && i.focusUnits != null && i.now >= this.servoUntil) {
       const err = servoTarget - i.focusUnits;
       const big = Math.abs(err) > ONEPUSH_ABOVE_UNITS;
-      const sweepNow = big && settled && (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX &&
-        (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+      // A big plane still soft near the learned point: the point is wrong
+      // for it (distance) — hand over to a sweep instead of servoing on.
+      const softHere = this.softSince != null && i.now - this.softSince > 1500 && Math.abs(err) < 2 * ONEPUSH_ABOVE_UNITS;
+      const sweepNow = (big || softHere) && (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX &&
+        (big ? settled : true) && (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+      if (sweepNow && softHere) {
+        this.lastActionAt = i.now;
+        this.lastOnePushAt = i.now;
+        this.softSince = null;
+        out.push({ kind: "onePush" });
+        return out;
+      }
       if (!sweepNow && Math.abs(err) > NUDGE_MIN_UNITS) {
-        const step = Math.sign(err) * Math.min(Math.abs(err), SERVO_BURST_UNITS);
+        const step = Math.sign(err) * Math.min(Math.abs(err), Math.abs(err) > 300 ? 150 : SERVO_BURST_UNITS);
         this.servoUntil = i.now + (Math.abs(step) / 90) * 1000 + SERVO_GAP_MS;
         this.lastActionAt = i.now;
         out.push({ kind: "nudge", deltaUnits: step, target: servoTarget });
@@ -249,8 +284,8 @@ export class FocusController {
     return out;
   }
 
-  private learn(zoom: number, focus: number, edgePx: number, now: number): void {
-    const b = Math.round(zoom / LUT_BUCKET);
+  private learn(zoom: number, band: number, focus: number, edgePx: number, now: number): void {
+    const b = Math.round(zoom / LUT_BUCKET) * 10 + band;
     const e = this.lut.get(b);
     if (!e) this.lut.set(b, { focus, edgePx, n: 1, at: now });
     else {
@@ -270,7 +305,7 @@ export class FocusController {
     this.dirty = false;
     try {
       fs.mkdirSync(dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, JSON.stringify({ bucket: LUT_BUCKET, lut: this.table() }));
+      fs.writeFileSync(this.file, JSON.stringify({ bucket: LUT_BUCKET, bands: BAND_EDGES_M.length + 1, lut: this.table() }));
     } catch {
       /* best-effort */
     }

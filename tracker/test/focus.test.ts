@@ -57,10 +57,10 @@ describe("FocusController", () => {
       expect.objectContaining({ kind: "nudge" }));
     // within 30 of the stop: bursts even while the lens is still moving
     const a = f.update({ ...base, now: 300, zoomUnits: 1420, commandedZoom: 1437, focusUnits: -3300 });
-    expect(a).toEqual([{ kind: "nudge", deltaUnits: -60, target: -3870 }]);
+    expect(a).toEqual([{ kind: "nudge", deltaUnits: -150, target: -3870 }]); // big error → big burst
     // next burst only after it has run + a gap
     expect(f.update({ ...base, now: 500, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3360 })).toEqual([]);
-    expect(f.update({ ...base, now: 1300, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3700 })).toContainEqual(
+    expect(f.update({ ...base, now: 2300, zoomUnits: 1437, commandedZoom: 1437, focusUnits: -3700 })).toContainEqual(
       { kind: "nudge", deltaUnits: -60, target: -3870 });
   });
 
@@ -89,12 +89,24 @@ describe("FocusController by target size", () => {
     const f = new FocusController();
     const acts = run(f, { ...base, zoomUnits: 1437, locked: false, detected: false, sweepOk: true, targetPx: 25, focusUnits: -3200 }, 0, 1600);
     expect(acts).not.toContainEqual({ kind: "onePush" });
-    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -60, target: -3870 });
+    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -150, target: -3870 });
   });
 
   it("resets the focus distance to the far stop when a pass starts wide", () => {
     const f = new FocusController();
     f.update({ ...base, zoomedIn: false });
     expect(f.update({ ...base, now: 200, zoomUnits: 0 })).toEqual([{ kind: "farReference" }]);
+  });
+});
+
+describe("FocusController distance bands", () => {
+  it("keeps near and far planes' focus apart, and sweeps a big plane soft at the far point", () => {
+    const f = new FocusController(); // far band seeded at -3870 for 1437
+    expect(f.learned(1437, 2)).toBe(-3870);
+    expect(f.learned(1437, 0)).toBeNull();
+    // close plane (2 km), big, soft while sitting at -3850: hand over to a sweep
+    const near = { ...base, zoomUnits: 1437, commandedZoom: 1437, slantM: 2000, targetPx: 200, detected: true, edgePx: 9, focusUnits: -3850 };
+    const acts = run(f, near, 0, 2400);
+    expect(acts).toContainEqual({ kind: "onePush" });
   });
 });

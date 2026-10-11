@@ -1230,6 +1230,7 @@ export class ControlLoop {
         sweepOk: fSteady && (fCentered || !fFresh),
         targetPx: angular != null ? (angular / Math.max(0.5, zoom.hfovDeg)) * 1280 : null,
         commandedZoom: zoom.zoomUnits,
+        slantM: prediction?.azEl.slantM ?? null,
         edgePx: fm && now - fm.t < 700 ? fm.edgePx : null,
         edgeContrast: fm?.contrast ?? null,
         focusUnits: d.getFocusUnits?.() ?? null,
@@ -1243,7 +1244,9 @@ export class ControlLoop {
         if (a.kind === "nudge" || a.kind === "onePush") {
           const extra = a.kind === "nudge" ? { delta: Math.round(a.deltaUnits), target: Math.round(a.target) } : {};
           this.recorder.write("focus", { action: a.kind, zoom: lensZoom, hfov: hfovDeg, ...extra });
-          this.emit({ kind: "focus", t: now, action: a.kind, zoom: lensZoom, hfov: hfovDeg });
+          // Servo bursts are many per pass; only sweeps belong on the pass
+          // timeline (34 "Focus nudged" events cluttered one pass page).
+          if (a.kind === "onePush") this.emit({ kind: "focus", t: now, action: a.kind, zoom: lensZoom, hfov: hfovDeg });
         }
       }
 
@@ -1699,6 +1702,7 @@ export class ControlLoop {
         }),
         autoCal: cfg.vision.autoCalibrate ? this.autoCal.status(cfg.mount) : undefined,
         lensFocusUnits: this.driver().getFocusUnits?.() ?? null,
+        focusDebug: this.focus.debug,
         focus: this.focusMetric
           ? { edgePx: this.focusMetric.edgePx, contrast: this.focusMetric.contrast, ageMs: now - this.focusMetric.t }
           : null,

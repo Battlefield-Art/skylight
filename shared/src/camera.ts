@@ -205,6 +205,8 @@ export interface VisionState {
   focus?: { edgePx: number; contrast: number; ageMs: number } | null;
   /** Lens focus position from the camera, raw units (larger = nearer). */
   lensFocusUnits?: number | null;
+  /** Focus controller's last decision inputs (debugging). */
+  focusDebug?: Record<string, number | boolean | string | null>;
   /** Landmark (skyline) re-calibration: catches a moved/re-placed base. */
   landmarks?: {
     refs: number;
