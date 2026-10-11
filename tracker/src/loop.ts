@@ -91,6 +91,10 @@ const LM_MIN_SUN_EL = 8;
 /** Reference azimuths (world); el = local horizon − 4° so the skyline sits
  *  in the upper half of a wide frame. */
 const LM_AZIMUTHS = [15, 60, 105, 150, 195, 240, 285, 330];
+/** Drift fold-in from per-pass vision bias (foldPassBias). */
+const BIAS_FOLD_PASSES = 4;
+const BIAS_FOLD_MIN_DEG = 0.6;
+const BIAS_FOLD_MAX_SPREAD = 0.8;
 /** Vision bias-correction clamp, deg. The estimator measures an exogenous
  *  ADS-B-vs-mount offset directly (no plant feedback), so it cannot wind up;
  *  the clamp only bounds the damage of a wrong lock. It was 12° so a stale
@@ -708,6 +712,53 @@ export class ControlLoop {
     }
   }
 
+  /** Bias corrections sampled while locked this pass (az, el deg). */
+  private passBias: { az: number; el: number }[] = [];
+  private biasSampleAt = 0;
+  /** Recent passes' median corrections, newest last. */
+  private biasHistory: { az: number; el: number; t: number }[] = [];
+
+  /**
+   * Drift fold-in. The per-pass vision bias IS the mount-model error where
+   * the plane flew; when several recent passes agree on a sizeable offset
+   * the mount has moved (pan slips of 1-2° were seen repeatedly on
+   * 2026-10-11, and a busy evening sky starves the landmark check of idle
+   * time — "paused 4/7" for 30 min while every pass needed +1.5° az). Fold
+   * the median into the offsets (off_new = off − corr), shift auto-cal's
+   * samples by the same delta, and have the landmark references re-shot.
+   */
+  private foldPassBias(now: number): void {
+    const b = this.passBias;
+    this.passBias = [];
+    if (b.length < 20) return;
+    const med = (xs: number[]) => {
+      const v = [...xs].sort((p, q) => p - q);
+      return v[v.length >> 1];
+    };
+    this.biasHistory.push({ az: med(b.map((x) => x.az)), el: med(b.map((x) => x.el)), t: now });
+    this.biasHistory = this.biasHistory.filter((h) => now - h.t < 45 * 60_000).slice(-6);
+    const last = this.biasHistory.slice(-BIAS_FOLD_PASSES);
+    if (last.length < BIAS_FOLD_PASSES) return;
+    const cfg = this.cfg();
+    const fold = (vals: number[]) => {
+      const m = med(vals);
+      const sameSign = vals.every((v) => Math.sign(v) === Math.sign(m));
+      const spread = Math.max(...vals) - Math.min(...vals);
+      return Math.abs(m) >= BIAS_FOLD_MIN_DEG && sameSign && spread <= BIAS_FOLD_MAX_SPREAD ? m : 0;
+    };
+    const dAz = fold(last.map((h) => h.az));
+    const dEl = fold(last.map((h) => h.el));
+    if (dAz === 0 && dEl === 0) return;
+    const m = cfg.mount;
+    const next = { ...m, panOffsetDeg: m.panOffsetDeg - dAz, tiltOffsetDeg: m.tiltOffsetDeg - dEl };
+    this.autoCal.shiftSamples(-dAz, -dEl, m.panGain, m.tiltGain, now);
+    this.upstream.patchConfig({ tracker: { mount: next } } as Partial<Config>);
+    this.landmarks.set = null; // re-shoot the references under the new model
+    this.biasHistory = [];
+    this.recorder.write("biasFold", { dAz, dEl, mount: next });
+    console.log(`[tracker] bias fold-in: pan offset ${(-dAz).toFixed(2)}°, tilt offset ${(-dEl).toFixed(2)}° (last ${BIAS_FOLD_PASSES} passes agree)`);
+  }
+
   private resetSetpoint(): void {
     this.azTracker.reset();
     this.elTracker.reset();
@@ -792,6 +843,7 @@ export class ControlLoop {
       // (null vs undefined: with no target at all this must NOT fire every
       // tick — it resets the setpoint/vision state and spams the recorder.)
       if ((hex ?? null) !== (this.current?.hex ?? null)) {
+        this.foldPassBias(now);
         this.current = hex ? { hex, sinceMs: now } : null;
         this.resetSetpoint();
         this.recorder.write("target", { hex });
@@ -1012,6 +1064,14 @@ export class ControlLoop {
         cfg.vision.applyCorrection &&
         this.visionGoodSince > 0 &&
         now - this.visionGoodSince > 800;
+      // Per-pass bias evidence for the drift fold-in (see foldPassBias).
+      if (visionLocked && now - this.biasSampleAt > 500) {
+        const elB = prediction.azEl.elDeg;
+        if (elB >= 20 && elB <= 75) {
+          this.biasSampleAt = now;
+          this.passBias.push({ az: this.corrAz, el: this.corrEl });
+        }
+      }
       // Pointing sigma: any FRESH, motion-consistent lock means vision is
       // closing the loop — not only after the centre-hold timer, which the
       // ladder resets on every rung. Tying sigma to that timer made each
