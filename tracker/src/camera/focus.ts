@@ -69,7 +69,7 @@ const SERVO_GAP_MS = 250;
 /** A one-push sweep runs ~1-3 s; the servo stays off meanwhile. */
 const SWEEP_RUN_MS = 3000;
 /** Servo only on the final approach to the commanded stop. */
-const SERVO_ZOOM_TOL = 30;
+const SERVO_ZOOM_TOL = 120;
 const ONEPUSH_COOLDOWN_MS = 8000;
 /** Slow: sharp samples spread across a ~300-unit depth-of-field zone at
  *  tele; a fast average walked to its far edge (−4142 at 1437). */
@@ -234,8 +234,15 @@ export class FocusController {
       // than crawl at ~80 u/s — and not "once settled": the servo's own
       // bursts kept the lens from ever settling, so the sweep never fired
       // (TZP26 sat 950 units off, a blur, for 12+ s).
-      const sweepNow = (big || softHere) && (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX &&
+      // With a learned point the servo goes the right way; the camera's
+      // one-push at 20× does not (SKW5578: 716 units short, the sweep raced
+      // the WRONG way to −2213 and the plane went from soft to a blur). A
+      // sweep only when the plane stays soft right AT the learned point
+      // (wrong point for this plane).
+      const sweepNow = softHere && Math.abs(err) < 2 * NUDGE_MIN_UNITS + 40 &&
+        (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX &&
         (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
+      void big;
       if (sweepNow) {
         this.lastActionAt = i.now;
         this.lastOnePushAt = i.now;
@@ -255,6 +262,7 @@ export class FocusController {
     if (!settled || i.now - this.lastActionAt < ACTION_COOLDOWN_MS) return out;
 
     const off = target != null && i.focusUnits != null ? target - i.focusUnits : null;
+    const softNow = this.softSince != null && i.now - this.softSince >= SOFT_HOLD_MS;
     // Settled far from the learned point with a plane the AF can see: sweep
     // (the servo leaves these to the one-push; ~1-3 s vs 4+ s of driving).
     // Distant/high planes are a few dozen pixels: the camera's contrast AF
@@ -264,7 +272,7 @@ export class FocusController {
     // point, which is right for them anyway (deep depth of field at range).
     const bigEnough = (i.targetPx ?? Infinity) >= SWEEP_MIN_TARGET_PX;
     const canSweep = bigEnough && (i.sweepOk ?? i.locked) && i.now - this.lastOnePushAt > ONEPUSH_COOLDOWN_MS;
-    if (off != null && Math.abs(off) > ONEPUSH_ABOVE_UNITS && canSweep) {
+    if (off == null && softNow && canSweep) {
       this.lastActionAt = i.now;
       this.lastOnePushAt = i.now;
       out.push({ kind: "onePush" });
@@ -273,15 +281,12 @@ export class FocusController {
     // Arriving at a zoom we know: go straight to the learned point.
     if (justSettled && off != null && Math.abs(off) > 2 * NUDGE_MIN_UNITS) {
       this.lastActionAt = i.now;
-      if (Math.abs(off) > ONEPUSH_ABOVE_UNITS && canSweep) {
-        this.lastOnePushAt = i.now;
-        out.push({ kind: "onePush" });
-      } else out.push({ kind: "nudge", deltaUnits: off, target: target! });
+      out.push({ kind: "nudge", deltaUnits: off, target: target! });
       return out;
     }
     // Soft on the plane for a moment: correct.
     if ((i.detected ?? i.locked) && this.softSince != null && i.now - this.softSince >= SOFT_HOLD_MS) {
-      if (off != null && Math.abs(off) > NUDGE_MIN_UNITS && !(Math.abs(off) > ONEPUSH_ABOVE_UNITS && canSweep)) {
+      if (off != null && Math.abs(off) > NUDGE_MIN_UNITS) {
         this.lastActionAt = i.now;
         this.softSince = null;
         out.push({ kind: "nudge", deltaUnits: off, target: target! });

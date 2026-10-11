@@ -47,11 +47,13 @@ describe("FocusController", () => {
     // later the lens is 270 off: the servo bursts straight toward it
     const acts = f.update({ ...base, now: 5000, targetPx: 30, edgePx: 8, focusUnits: -3600 });
     expect(acts).toEqual([{ kind: "nudge", deltaUnits: -60, target: -3870 }]);
-    // far off, locked, lens settled: a one-push sweep beats a 10 s drive
+    // far off with a learned point: servo, never the camera's sweep (it races
+    // the wrong way at 20x)
     const g = new FocusController(null, false);
     run(g, { ...base, edgePx: 2.4, focusUnits: -3870 }, 0, 1200);
     const b = run(g, { ...base, edgePx: 8, focusUnits: -2900 }, 9000, 11000);
-    expect(b).toContainEqual({ kind: "onePush" });
+    expect(b).not.toContainEqual({ kind: "onePush" });
+    expect(b.some((a) => a.kind === "nudge" && a.deltaUnits < 0)).toBe(true);
   });
 
   it("servos toward the commanded stop's learned point during the final approach", () => {
@@ -82,8 +84,9 @@ describe("FocusController gating", () => {
     const f = new FocusController();
     const acts = run(f, { ...base, zoomUnits: 1437, locked: false, detected: true, edgePx: 6, focusUnits: -3700 }, 0, 1600);
     expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -60, target: -3870 });
-    const g = new FocusController();
-    const b = run(g, { ...base, zoomUnits: 1437, locked: false, detected: false, sweepOk: true, focusUnits: -3200 }, 0, 1600);
+    // nothing learned for this zoom/band and the plane is soft: sweep
+    const g = new FocusController(null, false);
+    const b = run(g, { ...base, zoomUnits: 1300, locked: false, detected: true, edgePx: 7, sweepOk: true, focusUnits: -600 }, 0, 1600);
     expect(b).toContainEqual({ kind: "onePush" });
   });
 });
@@ -115,12 +118,11 @@ describe("FocusController distance bands", () => {
   });
 });
 
-describe("FocusController sweeps big planes at once", () => {
-  it("sweeps a big, centred plane far off focus without waiting for the lens to settle", () => {
+describe("FocusController prefers the servo when a point is learned", () => {
+  it("drives a big plane far off focus toward the learned point instead of sweeping", () => {
     const f = new FocusController();
-    const acts = f.update({ ...base, zoomUnits: 1437, commandedZoom: 1437, targetPx: 150, sweepOk: true, focusUnits: -2900 });
-    expect(acts).toContainEqual({ kind: "onePush" });
-    // and the servo holds off while it runs
-    expect(f.update({ ...base, now: 1000, zoomUnits: 1437, commandedZoom: 1437, targetPx: 150, focusUnits: -3300 })).toEqual([]);
+    const acts = run(f, { ...base, zoomUnits: 1437, commandedZoom: 1437, targetPx: 150, sweepOk: true, detected: true, edgePx: 8, focusUnits: -3100 }, 0, 1200);
+    expect(acts).not.toContainEqual({ kind: "onePush" });
+    expect(acts).toContainEqual({ kind: "nudge", deltaUnits: -150, target: -3870 });
   });
 });
