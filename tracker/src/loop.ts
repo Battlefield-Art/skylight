@@ -158,6 +158,13 @@ const ZOOM_IN_HOLD_MS = 600;
 const ZOOM_OUT_HOLD_MS = 600;
 /** The ladder widens a rung only after the lock has been bad this long. */
 const LADDER_DEMOTE_AFTER_MS = 1200;
+/** Search cycle while the plane isn't in sight (new, or lost > LADDER_LOST_MS):
+ *  sized rung, one rung wider at ACQ_WIDER_MS, wide at ACQ_WIDE_MS, and
+ *  from the top again at ACQ_CYCLE_MS. */
+const ACQ_WIDER_MS = 8000;
+const ACQ_WIDE_MS = 16_000;
+const ACQ_CYCLE_MS = 24_000;
+const LADDER_LOST_MS = 6000;
 /** Rung cadence: normal, and when the lock is dead-centred and established
  *  (after the zenith flip the plane is close and big — framing it within a
  *  couple of seconds matters more than caution). */
@@ -305,6 +312,10 @@ export class ControlLoop {
   private zenithLatched = false;
   /** When the crossing regime was last released (short-lead window). */
   private zenithExitAt = 0;
+  /** Last tick the search clock was held (plane below the skyline, or the
+   *  overhead park/hand-over) — acquisition time only counts while the plane
+   *  can actually be seen. */
+  private acqHoldAt = 0;
   /** Bias-innovation gate: consecutive frames whose measured bias disagrees
    *  with the running estimate by more than the gate. */
   private biasOutliers = 0;
@@ -1155,41 +1166,49 @@ export class ControlLoop {
         const detFresh =
           this.lastDetection && now - this.lastDetection.t < 1200;
         const locked = visionLocked;
+        // Hold the search clock while there is nothing to find: a departure
+        // is picked at lift-off and spends ~30 s below the roofline, and the
+        // overhead park is wide by design. (The clock used to run from target
+        // pick, so SKW6277 on 2026-10-12 hit "wide" before it ever cleared
+        // the skyline and stayed at 56° — zero detections all pass.)
+        const visible =
+          prediction.azEl.elDeg >= horizonMinEl(cfg.limits.horizon, prediction.azEl.azDeg, -90);
+        if (!visible || hold) this.acqHoldAt = now;
         if (!detFresh && this.lastDetection == null) {
           const since = this.current?.sinceMs ?? now;
-          if (this.lastDetSeenAt < since) {
-            // ACQUISITION (nothing seen yet this pass): a small or distant
-            // plane is ~10 px at wide and never gets detected, so the ladder
-            // never climbs (UAL939: 79 s at 9 km, 0.44°, zero detections).
-            // Once the head has settled on the ADS-B aim (pointing is good
-            // to ~1° after autocal), start at a rung sized to the plane;
-            // if nothing shows within 8 s, fall back to wide.
-            // Sized so the plane spans ~20 vision px (HFOV ≈ 24 × its angular
-            // size, never under 6°: pointing is good to ~0.5° now). A fixed
-            // 13.5° rung left a 0.3° plane at 10 px — the ~11,000 ft overhead
-            // arrivals locked 9-21% of the time inbound. Unseen after 8 s:
-            // one rung wider; after 16 s: wide.
-            const settled = now - since > 1500 && lagDeg < 2;
+          const seen = this.lastDetSeenAt >= since;
+          if (seen && now - this.lastDetSeenAt <= LADDER_LOST_MS) {
+            // Just lost: step OUT one rung at a time first — a plane that
+            // went soft or dim is usually still in frame, and ×1.6 wider
+            // usually re-finds it in a second.
+            if (this.ladderIdx > 0 && now - this.lastLadderAt > LADDER_DEMOTE_AFTER_MS) {
+              this.ladderIdx--;
+              this.lastLadderAt = now;
+            }
+          } else {
+            // SEARCH (nothing seen yet, or lost for a while): a small or
+            // distant plane is ~10 px at wide and never gets detected, so the
+            // ladder never climbs (UAL939: 79 s at 9 km, 0.44°, zero
+            // detections). Once the head has settled on the ADS-B aim, start
+            // at a rung sized so the plane spans ~20 vision px (HFOV ≈ 24 ×
+            // its angular size, never under 6°); unseen: one rung wider, then
+            // wide, then try again. A lost plane re-enters this cycle too —
+            // N529QS sat at 36° for 45 s after an overhead crossing with the
+            // aim 0.5° off it, because "lost" used to mean wide for good.
+            const t0 = Math.max(since, this.acqHoldAt, seen ? this.lastDetSeenAt + LADDER_LOST_MS : 0);
+            const tAcq = (now - t0) % ACQ_CYCLE_MS;
+            const settled = now - t0 > 1500 && lagDeg < 2;
             const ang = zoom.angularSizeDeg ?? 1;
             const acqHfov = clamp(24 * ang, 6, wideHfov);
             const sizedRung = Math.max(0, Math.floor(Math.log(acqHfov / wideHfov) / Math.log(RUNG)));
-            const startRung = now - since >= 16_000 ? 0 : now - since >= 8000 ? Math.max(0, sizedRung - 1) : sizedRung;
-            if (now - since >= 8000 && this.ladderIdx > startRung) {
+            const startRung = tAcq >= ACQ_WIDE_MS ? 0 : tAcq >= ACQ_WIDER_MS ? Math.max(0, sizedRung - 1) : sizedRung;
+            if (this.ladderIdx > startRung) {
               this.ladderIdx = startRung;
               this.lastLadderAt = now;
             } else if (settled && startRung > this.ladderIdx) {
               this.ladderIdx = startRung;
               this.lastLadderAt = now;
             }
-          } else if (now - this.lastDetSeenAt > 6000) {
-            // Lost after having seen it: step OUT one rung at a time first —
-            // a plane that went soft or dim is usually still in frame, and
-            // ×1.6 wider usually re-finds it in a second. Only a sustained
-            // loss goes back to wide.
-            this.ladderIdx = 0;
-          } else if (this.ladderIdx > 0 && now - this.lastLadderAt > LADDER_DEMOTE_AFTER_MS) {
-            this.ladderIdx--;
-            this.lastLadderAt = now;
           }
         } else if (
           locked && detFresh &&
