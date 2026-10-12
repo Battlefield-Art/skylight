@@ -8,7 +8,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/plane-tracker/stabilizer
-ExecStart=/usr/bin/python3 -u -m skylight_stab run --jobs 7 --threads 4
+ExecStart=/usr/bin/python3 -u -m skylight_stab run --jobs 2 --threads 2
 Restart=on-failure
 RestartSec=60
 # Stay out of the way of the Twitch stream and the desktop: lowest CPU and IO priority, and a
@@ -16,7 +16,7 @@ RestartSec=60
 Nice=19
 CPUSchedulingPolicy=idle
 IOSchedulingClass=idle
-CPUQuota=2000%
+CPUQuota=600%
 MemoryMax=8G
 TimeoutStopSec=60
 
