@@ -2005,6 +2005,15 @@ export class ControlLoop {
           maxDistFrac: lockedBefore ? 0.22 : 0.45,
           minPeakSigma: 5,
         });
+        // Reserved slot for the plane: strong distractors (gull pieces were
+        // 20-80σ vs the plane's 8-18σ) can fill every slot and hide a locked
+        // plane for ~0.5 s. If nothing was found right at the expected spot,
+        // look there alone.
+        if (lockedBefore && !rawBlobs.some((b) => Math.hypot((b.cx - exX) * VISION_W, (b.cy - exY) * VISION_H) < 0.06 * VISION_W)) {
+          rawBlobs.push(...findMovingBlobs(resid, VISION_W, VISION_H, 1, {
+            expectedX: exX, expectedY: exY, maxDistFrac: 0.06, minPeakSigma: 5,
+          }));
+        }
         // A plane that fills a good part of the frame (full tele) leaves
         // SEVERAL residual blobs — nose, tail, engines, contrail — and the
         // lock hopped between them along the fuselage, dragging the aim
