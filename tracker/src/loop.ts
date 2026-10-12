@@ -161,6 +161,8 @@ const ACQ_WIDER_MS = 8000;
 const ACQ_WIDE_MS = 16_000;
 const ACQ_CYCLE_MS = 24_000;
 const LADDER_LOST_MS = 6000;
+/** A plane dropped for a challenger can't win the camera back for this long. */
+const TARGET_COOLDOWN_MS = 45_000;
 /** Rung cadence: normal, and when the lock is dead-centred and established
  *  (after the zenith flip the plane is close and big — framing it within a
  *  couple of seconds matters more than caution). */
@@ -312,6 +314,8 @@ export class ControlLoop {
    *  overhead park/hand-over) — acquisition time only counts while the plane
    *  can actually be seen. */
   private acqHoldAt = 0;
+  /** Targets dropped for a challenger, hex → until (see selectTarget). */
+  private targetCooldown = new Map<string, number>();
   /** Bias-innovation gate: consecutive frames whose measured bias disagrees
    *  with the running estimate by more than the gate. */
   private biasOutliers = 0;
@@ -576,6 +580,7 @@ export class ControlLoop {
             cfg.target.departurePriority === false ? null : (this.upstream.getConfig().airport ?? SFO_ARP),
             this.sunAt(cfg.site, now),
             cfg.targetMode,
+            this.targetCooldown,
           ),
         };
       } catch {
@@ -889,6 +894,7 @@ export class ControlLoop {
       cfg.limits.horizon,
       this.sunAt(cfg.site, now),
       cfg.target.departurePriority === false ? null : (this.upstream.getConfig?.()?.airport ?? SFO_ARP),
+      this.targetCooldown,
     );
 
     if (tracking) {
@@ -896,6 +902,13 @@ export class ControlLoop {
       // (null vs undefined: with no target at all this must NOT fire every
       // tick — it resets the setpoint/vision state and spams the recorder.)
       if ((hex ?? null) !== (this.current?.hex ?? null)) {
+        // Dropped while still trackable (a challenger won) → cooldown, so the
+        // two can't ping-pong. A target that simply left isn't penalised.
+        const prev = this.current?.hex;
+        if (prev && hex && selection.candidates.some((c) => c.hex === prev)) {
+          this.targetCooldown.set(prev, now + TARGET_COOLDOWN_MS);
+        }
+        for (const [h, until] of this.targetCooldown) if (until <= now) this.targetCooldown.delete(h);
         this.foldPassBias(now);
         this.current = hex ? { hex, sinceMs: now } : null;
         this.resetSetpoint();

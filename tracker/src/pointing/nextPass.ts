@@ -94,6 +94,8 @@ export function nextPlane(
   airport: { lat: number; lon: number } | null,
   sun: { azDeg: number; elDeg: number } | null,
   mode: TargetMode = "closest",
+  /** The live selector's target cooldown (see selectTarget). */
+  cooldown?: ReadonlyMap<string, number>,
 ): NextPlane | null {
   const cur0: CurrentTarget | null =
     typeof current === "string" ? { hex: current, sinceMs: now - 3_600_000 } : current;
@@ -111,7 +113,7 @@ export function nextPlane(
   };
   /** Would the selector (from `sim`) have switched to a new plane at t? */
   const pickAt = (fleet: Aircraft[], t: number, sim: CurrentTarget | null) => {
-    const sel = selectTarget(fleet, site, now + t * 1000, sim, mode, c, undefined, undefined, horizon, sun, airport);
+    const sel = selectTarget(fleet, site, now + t * 1000, sim, mode, c, undefined, undefined, horizon, sun, airport, cooldown);
     return { sel, hex: sel.hex && sel.hex !== cur0?.hex ? sel.hex : null };
   };
   let sim: CurrentTarget | null = cur0;
