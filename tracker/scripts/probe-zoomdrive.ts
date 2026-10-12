@@ -1,6 +1,7 @@
 // Lens check: plain VISCA zoom DRIVES (wide/tele, variable speed) and Zoom
 // Direct, reading the zoom position back. For a lens that ignores commands.
-// RUN ON THE PI with skylight-tracker STOPPED.
+// RUN ON THE PI with skylight-tracker STOPPED. Arg `init` first sends VISCA
+// Lens Initialization (81 01 04 19 01 FF).
 import dgram from "node:dgram";
 import { cameraTarget } from "./lib/camera-config.js";
 const { ip } = cameraTarget();
@@ -17,6 +18,14 @@ async function main(): Promise<void> {
   await new Promise<void>((r) => sock.bind(() => r()));
   send(0x0200, [0x01]); await sleep(400);
   console.log("start zoom", await zoom());
+  if (process.argv[2] === "init") {
+    // VISCA CAM_Initialize (Lens Initialization): re-runs the lens's
+    // power-up zoom/focus travel without a power cut.
+    last = null; send(0x0100, [0x81, 0x01, 0x04, 0x19, 0x01, 0xff]); await sleep(300);
+    console.log("lens init ack:", last ? (last as number[]).map((x) => x.toString(16)).join(" ") : "none");
+    await sleep(12000);
+    console.log("after lens init zoom", await zoom());
+  }
   for (const [name, cmd] of [["wide drive", [0x81, 0x01, 0x04, 0x07, 0x37, 0xff]], ["tele drive", [0x81, 0x01, 0x04, 0x07, 0x27, 0xff]]] as const) {
     last = null; send(0x0100, [...cmd]); await sleep(200);
     console.log(name, "ack:", last ? (last as number[]).map((x) => x.toString(16)).join(" ") : "none");
