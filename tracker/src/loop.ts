@@ -1050,14 +1050,17 @@ export class ControlLoop {
       // directions that are open.
       {
         const skyline = horizonMinEl(cfg.limits.horizon, az, -90);
-        if (el < skyline) {
-          // Waiting for a plane still below the skyline (a departure climbing
-          // out): frame the sky ABOVE the roofline rather than centring on it
-          // — the plane then rises into the lower part of the picture and the
-          // stream isn't half a house.
-          const vfov = hfovFromZoomUnits(d.getPose()?.zoomUnits ?? 0, cfg.zoom.fovLut) * (9 / 16);
-          el = skyline + 0.3 * vfov;
-        }
+        const vfov = hfovFromZoomUnits(d.getPose()?.zoomUnits ?? 0, cfg.zoom.fovLut) * (9 / 16);
+        const waitEl = skyline + 0.3 * vfov;
+        // Waiting for a plane still below the skyline (a departure climbing
+        // out): frame the sky ABOVE the roofline rather than centring on it
+        // — the plane then rises into the lower part of the picture and the
+        // stream isn't half a house. A RISING plane keeps that framing until
+        // it climbs up to it: dropping the aim onto the plane the moment it
+        // cleared the roofline and then chasing it back up (5-8°/s) blinded
+        // the detector — CES590 (777, in frame from ~12 s) first locked at 18 s.
+        const rising = (prediction?.elRateDps ?? 0) > 0.2;
+        if (el < skyline || (rising && el < waitEl)) el = Math.max(el, waitEl);
       }
       const pt = mountFromWorld(az, el, cfg.mount);
       // Pan dead-zone anticipation (see WRAP_SLEW_DPS).
