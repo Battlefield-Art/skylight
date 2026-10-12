@@ -114,6 +114,10 @@ export function ConfigPanel({
           onCommit={(v) => conn.send({ type: "patchTracker", patch: { zoom: { sigmaDeg: v } } })} />
         <Num label="manual hfov°" value={config.zoom.manualHfovDeg} step={1}
           onCommit={(v) => conn.send({ type: "patchTracker", patch: { zoom: { manualHfovDeg: v } } })} />
+        <Num label="min hfov° (0 = full tele)" value={config.zoom.minHfovDeg ?? 0} step={0.1}
+          onCommit={(v) => conn.send({ type: "patchTracker", patch: { zoom: { minHfovDeg: v } } })} />
+        <Num label="fill frac" value={config.zoom.fillFrac} step={0.02}
+          onCommit={(v) => conn.send({ type: "patchTracker", patch: { zoom: { fillFrac: v } } })} />
       </div>
 
       <div className="cfg-group">

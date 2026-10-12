@@ -158,6 +158,14 @@ export interface TrackerConfig {
     lockedSigmaDeg: number;
     /** Fraction of frame height the plane should fill. */
     fillFrac: number;
+    /**
+     * Never zoom tighter than this HFOV, deg (0 = the lens's full tele).
+     * Pointing wobble is ~fixed in degrees (tele 2026-10-12: centring p90
+     * 0.6-1.7°, 1-s hops p90 0.8-1.6°), so the tightest zoom shows it
+     * largest; a slightly wider limit trades a little plane size for a
+     * steadier, sharper-looking shot.
+     */
+    minHfovDeg: number;
     /** HFOV used when auto is off, deg. */
     manualHfovDeg: number;
     /** Measured zoom-units -> HFOV samples (endpoints from the datasheet). */
@@ -531,6 +539,7 @@ export const DEFAULT_CONFIG: Config = {
       sigmaDeg: 0.6,
       lockedSigmaDeg: 0.35,
       fillFrac: 0.28,
+      minHfovDeg: 0,
       manualHfovDeg: 20,
       // Datasheet endpoints; refined empirically at M4.
       fovLut: [
