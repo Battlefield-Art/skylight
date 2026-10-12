@@ -192,6 +192,20 @@ export class FocusController {
     return lo.f + ((zoomUnits - lo.z) / (hi.z - lo.z)) * (hi.f - lo.f);
   }
 
+  /**
+   * A learned focus TRUSTED enough to drive the lens there directly (Zoom-
+   * Focus Direct): this exact zoom's bucket (no interpolation) with at least
+   * `minN` sharp samples, else null. A 4-sample entry at zoom 720 threw a
+   * close 757 from razor-sharp to a blob in 0.2 s (DAL8926, 2026-10-12) —
+   * where the lens's own zoom tracking would have kept it sharp.
+   */
+  trusted(zoomUnits: number, band: number, minN: number): number | null {
+    const b = Math.round(zoomUnits / LUT_BUCKET) * 10;
+    const e = this.lut.get(b + band);
+    if (!e || e.n < minN) return null;
+    return this.learned(zoomUnits, band);
+  }
+
   table(): Record<number, LutEntry> {
     return Object.fromEntries(this.lut);
   }

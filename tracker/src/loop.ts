@@ -161,6 +161,12 @@ const ACQ_WIDER_MS = 8000;
 const ACQ_WIDE_MS = 16_000;
 const ACQ_CYCLE_MS = 24_000;
 const LADDER_LOST_MS = 6000;
+/** Learn the vision bias only while the aim moves slower than this, deg/s. */
+const BIAS_MAX_AIM_RATE_DPS = 3;
+/** Zoom-Focus Direct only at/above this zoom (the tele stops)... */
+const ZOOM_FOCUS_MIN_UNITS = 1173;
+/** ...and only for a focus learned from at least this many sharp frames. */
+const ZOOM_FOCUS_MIN_SAMPLES = 20;
 /** A plane dropped for a challenger can't win the camera back for this long. */
 const TARGET_COOLDOWN_MS = 45_000;
 /** Rung cadence: normal, and when the lock is dead-centred and established
@@ -597,7 +603,14 @@ export class ControlLoop {
    * crawling the rest at ~60 u/s. Unlearned zooms fall back to plain zoom.
    */
   private commandZoom(d: CameraDriver, zoomUnits: number, slantM: number | null): void {
-    const f = d.setZoomFocus ? this.focus.learned(zoomUnits, distanceBand(slantM)) : null;
+    // Only where the lens's own zoom tracking falls short — the tele stops,
+    // where it landed 300-1400 units off — and only on a well-learned point.
+    // Elsewhere tracking preserves the current focus DISTANCE, which is right
+    // for the plane already in focus; forcing a table value there defocused a
+    // close plane instantly (see FocusController.trusted).
+    const f = d.setZoomFocus && zoomUnits >= ZOOM_FOCUS_MIN_UNITS
+      ? this.focus.trusted(zoomUnits, distanceBand(slantM), ZOOM_FOCUS_MIN_SAMPLES)
+      : null;
     if (f != null) d.setZoomFocus!(zoomUnits, f);
     else d.setZoom(zoomUnits);
   }
@@ -1022,6 +1035,9 @@ export class ControlLoop {
           this.elTracker.observe(prediction.azEl.elDeg, dtFix, prediction.elRateDps, stepMax);
           this.lastObservedTs = fixTs;
         }
+        // Follow the predictor's current rates between fixes (see steer()).
+        this.azTracker.steer((azLeadPred ?? prediction).azRateDps);
+        this.elTracker.steer(prediction.elRateDps);
         const dt = 1 / (cfg.predict.commandHz || 15);
         az = this.azTracker.propagate(dt, cfg.limits.panSpeedMaxDps);
         el = this.elTracker.propagate(dt, cfg.limits.tiltSpeedMaxDps);
@@ -1410,7 +1426,15 @@ export class ControlLoop {
         else if (a.kind === "farReference") d.setFocusInfinity(true); // manual + drive to the far stop
         // Zoom-Focus Direct lands the learned point in ~1-2 s; the timed
         // drive crawls ~60 u/s (6+ s soft after every arrival at tele).
-        else if (a.kind === "nudge") (d.setFocusDirect ? d.setFocusDirect(a.target) : d.focusNudge?.(a.deltaUnits));
+        else if (a.kind === "nudge") {
+          // Jump straight there only onto a trusted tele point; anything else
+          // stays a timed drive the sharpness feedback can catch mid-way.
+          const trusted = lensZoom >= ZOOM_FOCUS_MIN_UNITS
+            ? this.focus.trusted(lensZoom, distanceBand(prediction?.azEl.slantM ?? null), ZOOM_FOCUS_MIN_SAMPLES)
+            : null;
+          if (d.setFocusDirect && trusted != null && Math.abs(trusted - a.target) < 5) d.setFocusDirect(a.target);
+          else d.focusNudge?.(a.deltaUnits);
+        }
         else if (a.kind === "onePush" && cfg.vision.autofocusOnZoom) d.onePushAutofocus();
         if (a.kind === "nudge" || a.kind === "onePush") {
           const extra = a.kind === "nudge" ? { delta: Math.round(a.deltaUnits), target: Math.round(a.target) } : {};
@@ -2226,7 +2250,11 @@ export class ControlLoop {
           }
         }
 
-        const steady = aimRateDps < 8 && elF < 75;
+        // The bias is a slow ADS-B offset: learn it only with the head nearly
+        // still. During a fast slew the pose estimate runs ahead of the real
+        // head, and that error was learned as bias and pulled the aim the
+        // wrong way (DAL8926: plane at the frame top, correction pulling DOWN).
+        const steady = aimRateDps < BIAS_MAX_AIM_RATE_DPS && elF < 75;
         // The lock IS the temporal confirmation now: a track only becomes
         // the lock after several coherent, motion-consistent frames.
         const confirmed = lt.hits >= 4;

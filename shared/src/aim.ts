@@ -362,6 +362,9 @@ export class AxisTracker {
   pos = 0;
   rate = 0;
   private initialized = false;
+  /** rate − rateHint at the last observation: the filter's own correction,
+   *  kept while the geometric rate hint is refreshed between fixes. */
+  private rateBias = 0;
 
   constructor(
     private wrap: boolean,
@@ -373,6 +376,18 @@ export class AxisTracker {
     this.initialized = pos != null;
     this.pos = pos ?? 0;
     this.rate = 0;
+    this.rateBias = 0;
+  }
+
+  /**
+   * Between fixes: follow the target's CURRENT geometric rate (recomputed by
+   * the predictor every tick) plus the filter's last correction. Holding the
+   * rate from the last fix lagged an accelerating close climb-out by ½·a·t²
+   * — ~5-7° of tilt on DAL8926 (2026-10-12) with a few seconds between fixes.
+   */
+  steer(rateHint: number): void {
+    if (!this.initialized || !Number.isFinite(rateHint)) return;
+    this.rate = rateHint + this.rateBias;
   }
 
   /** Advance the smoothed setpoint by dt, rate-limited to maxDps. */
@@ -393,6 +408,7 @@ export class AxisTracker {
     if (!this.initialized) {
       this.pos = target;
       this.rate = rateHint ?? 0;
+      this.rateBias = 0;
       this.initialized = true;
       return;
     }
@@ -406,6 +422,7 @@ export class AxisTracker {
     if (this.wrap) this.pos = norm360(this.pos);
     if (rateHint != null) {
       this.rate = rateHint + (dtFixSec > 0.05 ? (this.beta / dtFixSec) * resid : 0);
+      this.rateBias = this.rate - rateHint;
     } else if (dtFixSec > 0.05) {
       this.rate += (this.beta / dtFixSec) * resid;
     }
