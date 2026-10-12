@@ -1260,9 +1260,12 @@ export class ControlLoop {
         } else {
           // Ladder has reached the ADS-B framing — clamp the rung so a later
           // demotion starts from here, not from rungs banked beyond it.
+          // (ceil, not round: the rung must stay AT or inside the framing.
+          // Rounding sent a 4.1° framing back to the 5.2° rung, so with
+          // zoom.minHfovDeg 4.1 the lens never got past the 5.04° stop.)
           this.ladderIdx = Math.max(
             0,
-            Math.round(Math.log(zoom.hfovDeg / wideHfov) / Math.log(RUNG)),
+            Math.ceil(Math.log(zoom.hfovDeg / wideHfov) / Math.log(RUNG) - 1e-6),
           );
         }
       }
