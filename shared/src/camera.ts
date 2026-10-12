@@ -241,6 +241,16 @@ export interface PassArchiveStatus {
 /** Everything the debug UI needs, broadcast ~5–10 Hz. */
 export interface TrackerState {
   now: number;
+  /** Soonest aircraft to become trackable (stream countdown). */
+  nextPlane?: {
+    hex: string;
+    flight?: string;
+    typeCode?: string;
+    typeName?: string;
+    etaSec: number;
+    azDeg: number;
+    departure: boolean;
+  } | null;
   mode: TrackerMode;
   targetMode: TargetMode;
   driver: CameraDiagnostics;

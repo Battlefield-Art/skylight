@@ -54,6 +54,7 @@ import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom } from "./pointing/zoom.js";
 import { FocusController } from "./camera/focus.js";
+import { nextPlane, type NextPlane } from "./pointing/nextPass.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
 import { silhouetteCentroid } from "./vision/silhouette.js";
 import { measureSharpness } from "./vision/sharpness.js";
@@ -553,7 +554,28 @@ export class ControlLoop {
 
   // --- the tick ---
 
+  private nextPlaneCache: { t: number; v: NextPlane | null } = { t: 0, v: null };
   private sunCache: { t: number; sun: { azDeg: number; elDeg: number } | null } | null = null;
+
+  /** Next trackable plane, refreshed each second. */
+  private nextPlaneAt(now: number, cfg: TrackerConfig): NextPlane | null {
+    if (now - this.nextPlaneCache.t > 1000) {
+      try {
+        this.nextPlaneCache = {
+          t: now,
+          v: nextPlane(
+            this.upstream.getAircraft(), cfg.site, now, cfg.target, cfg.limits.horizon,
+            this.current?.hex ?? null,
+            cfg.target.departurePriority === false ? null : (this.upstream.getConfig().airport ?? SFO_ARP),
+            this.sunAt(cfg.site, now),
+          ),
+        };
+      } catch {
+        this.nextPlaneCache = { t: now, v: null };
+      }
+    }
+    return this.nextPlaneCache.v;
+  }
 
   /** Sun direction, refreshed every 30 s (it moves ~0.25°/min). */
   private sunAt(site: GeoPoint, now: number): { azDeg: number; elDeg: number } | null {
@@ -1001,7 +1023,17 @@ export class ControlLoop {
       // Never aim below the surveyed clear-sky horizon for this azimuth
       // (roofs/trees); the global tilt floor can then sit low for the
       // directions that are open.
-      el = Math.max(el, horizonMinEl(cfg.limits.horizon, az, -90));
+      {
+        const skyline = horizonMinEl(cfg.limits.horizon, az, -90);
+        if (el < skyline) {
+          // Waiting for a plane still below the skyline (a departure climbing
+          // out): frame the sky ABOVE the roofline rather than centring on it
+          // — the plane then rises into the lower part of the picture and the
+          // stream isn't half a house.
+          const vfov = hfovFromZoomUnits(d.getPose()?.zoomUnits ?? 0, cfg.zoom.fovLut) * (9 / 16);
+          el = skyline + 0.3 * vfov;
+        }
+      }
       const pt = mountFromWorld(az, el, cfg.mount);
       // Pan dead-zone anticipation (see WRAP_SLEW_DPS).
       {
@@ -1794,6 +1826,7 @@ export class ControlLoop {
         },
       },
       site: cfg.site,
+      nextPlane: this.nextPlaneAt(now, cfg),
       upstream: {
         connected: this.upstream.isConnected(),
         aircraftCount: this.upstream.getAircraft().length,
