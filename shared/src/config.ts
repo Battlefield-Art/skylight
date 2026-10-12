@@ -145,6 +145,15 @@ export interface TrackerConfig {
      */
     panLatencySec: number;
     tiltLatencySec: number;
+    /**
+     * Extra lead on the AIM only, s (not on the loop's error reference). The
+     * per-axis latencies above set both the setpoint lead and the "command
+     * the head is executing now" reference, so raising them cancels out in
+     * steady pursuit. Measured 2026-10-12: the plane sat ~0.45 s AHEAD of
+     * frame centre along-track in every pass while the vision bias said
+     * ADS-B was right (along-track ≈ 0) — the head trails its own estimate.
+     */
+    aimLeadSec: number;
   };
   zoom: {
     auto: boolean;
@@ -533,6 +542,7 @@ export const DEFAULT_CONFIG: Config = {
       rippleTeleDeg: 0.25,
       panLatencySec: 0.6,
       tiltLatencySec: 0.4,
+      aimLeadSec: 0,
     },
     zoom: {
       auto: true,

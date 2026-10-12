@@ -915,8 +915,12 @@ export class ControlLoop {
       // re-lock). Keep the lead short there; vision centres the rest.
       const shortLead = this.zenithLatched || now - this.zenithExitAt < 3000;
       const curPT = poseEst ? { panDeg: poseEst.panDeg, tiltDeg: poseEst.tiltDeg } : null;
-      const tiltLat = cfg.predict.tiltLatencySec ?? 0.4;
-      const panLat = cfg.predict.panLatencySec ?? 0.6;
+      // Setpoint lead per axis = actuator latency + the aim-only lead (the
+      // latter is NOT in the cmdAt() error reference below, so it shifts
+      // where the head ends up instead of cancelling out).
+      const aimLead = shortLead ? 0 : cfg.predict.aimLeadSec ?? 0;
+      const tiltLat = (cfg.predict.tiltLatencySec ?? 0.4) + aimLead;
+      const panLat = (cfg.predict.panLatencySec ?? 0.6) + aimLead;
       const baseP = { ...cfg.predict, motorLatencySec: tiltLat };
       prediction = predictAim(
         targetAc, cfg.site, now, this.history,
