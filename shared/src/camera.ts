@@ -103,6 +103,9 @@ export interface TargetCriteria {
    * sensor burn at worst.
    */
   sunAvoidDeg?: number;
+  /** Departures from the home airport heading at the site win selection
+   *  from lift-off (default true). */
+  departurePriority?: boolean;
 }
 
 export interface Candidate {

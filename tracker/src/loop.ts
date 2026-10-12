@@ -91,6 +91,7 @@ const LM_MIN_SUN_EL = 8;
 /** Reference azimuths (world); el = local horizon − 4° so the skyline sits
  *  in the upper half of a wide frame. */
 const LM_AZIMUTHS = [15, 60, 105, 150, 195, 240, 285, 330];
+const WRAP_REARM_MS = 4000;
 /** Drift fold-in from per-pass vision bias (foldPassBias). */
 const BIAS_FOLD_PASSES = 3;
 const BIAS_FOLD_MIN_DEG = 0.6;
@@ -291,6 +292,9 @@ export class ControlLoop {
   private wasHold = false;
   /** Latched while pre-positioned at the far side of the pan dead zone. */
   private wrapHolding = false;
+  /** Released this crossing at — no re-engage for WRAP_REARM_MS (it flapped
+   *  engage/release every 0.1 s through UAE41P's 210° sweep). */
+  private wrapReleasedAt = 0;
   private wrapGoal = 0;
   /** Gear-aware zoom floor currently applied (0 = none); hysteresis state. */
   private gearFloorHfov = 0;
@@ -842,6 +846,7 @@ export class ControlLoop {
       undefined,
       cfg.limits.horizon,
       this.sunAt(cfg.site, now),
+      cfg.target.departurePriority === false ? null : (this.upstream.getConfig?.()?.airport ?? SFO_ARP),
     );
 
     if (tracking) {
@@ -1004,7 +1009,7 @@ export class ControlLoop {
         const inZone = pt.panDeg < lim.panMinDeg || pt.panDeg > lim.panMaxDeg;
         const exitPan = plan?.wrapExitPanDeg;
         const crossing = !hold && poseEst != null && plan != null && exitPan != null && plan.wrapOutSec != null;
-        if (crossing && !this.wrapHolding && poseEst && plan && exitPan != null && plan.wrapOutSec != null) {
+        if (crossing && !this.wrapHolding && now - this.wrapReleasedAt > WRAP_REARM_MS && poseEst && plan && exitPan != null && plan.wrapOutSec != null) {
           const goal = clamp(exitPan, lim.panMinDeg + 1, lim.panMaxDeg - 1);
           const slewSec = Math.abs(goal - poseEst.panDeg) / WRAP_SLEW_DPS + WRAP_SETTLE_SEC;
           // ...and the slew to where the plane is NOW (within range): if the
@@ -1036,11 +1041,13 @@ export class ControlLoop {
           const emerged = !inZone && (Math.sign(pt.panDeg) || 1) === (Math.sign(this.wrapGoal) || 1);
           if (emerged) {
             this.wrapHolding = false;
+            this.wrapReleasedAt = now;
             this.recorder.write("wrap", { phase: "release", panDeg: pt.panDeg });
             this.emit({ kind: "wrap", t: now, phase: "release", panDeg: pt.panDeg });
           } else if (!inZone && !crossing && !hold) {
             // Plan no longer crosses (course change) and the plane is reachable.
             this.wrapHolding = false;
+            this.wrapReleasedAt = now;
             this.recorder.write("wrap", { phase: "release", panDeg: pt.panDeg, reason: "no-crossing" });
             this.emit({ kind: "wrap", t: now, phase: "release", panDeg: pt.panDeg, reason: "no-crossing" });
           } else if (!hold) {
