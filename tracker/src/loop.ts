@@ -53,7 +53,7 @@ import {
 import { planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
-import { chooseZoom } from "./pointing/zoom.js";
+import { chooseZoom, snapToStop, zoomStopsHfov } from "./pointing/zoom.js";
 import { FocusController } from "./camera/focus.js";
 import { nextPlane, type NextPlane } from "./pointing/nextPass.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
@@ -146,10 +146,6 @@ const WRAP_SETTLE_SEC = 1.0;
 /** A broadcast detection that moves more than this fraction of the frame
  *  width between consecutive frames is held back until it persists. */
 const DET_HOP_FRAC = 0.08;
-/** Fixed zoom stops near tele, in LENS UNITS (full tele first); their
- *  HFOVs come from the fovLut, so a re-measured lens table can't move the
- *  stops off full tele. */
-const TELE_STOP_UNITS = [1437, 1385, 1332, 1260, 1173];
 /** Expected plane size (vision px, 480 wide) above which detections are
  *  re-centred on the whole silhouette (vision/silhouette.ts). */
 const SILHOUETTE_MIN_PX = 14;
@@ -1320,14 +1316,15 @@ export class ControlLoop {
           zoom.zoomUnits = zoomUnitsFromHfov(cur, cfg.zoom.fovLut);
         }
       }
-      // Zoom STOPS near tele: the lens's focus-tracking curve there is ~37
-      // focus units per zoom unit, so every small creep (1437→1429→1414…)
-      // knocked focus hundreds of units off. Snap to a few fixed zooms —
-      // never tighter than wanted, so the smoothness floors hold — each of
-      // which gets a well-learned focus (camera/focus.ts).
-      const teleStopsDeg = TELE_STOP_UNITS.map((u) => hfovFromZoomUnits(u, cfg.zoom.fovLut));
-      if (zoom.hfovDeg < teleStopsDeg[teleStopsDeg.length - 1] * 1.15) {
-        const stop = teleStopsDeg.find((h) => h >= zoom.hfovDeg * 0.97) ?? zoom.hfovDeg;
+      // Zoom STOPS (tracker.zoom.stopUnits / stopRatio): the lens re-focuses
+      // after every zoom move — ~37 focus units per zoom unit near tele, and
+      // the servo only manages ~90 units/s — so a framing that crept through
+      // in-between values (4.4→5.8→6.6→8.3→9.4…, 20-60 zoom moves a pass on
+      // 2026-10-12) kept the picture soft. Snap to a few fixed zooms, never
+      // tighter than wanted so the smoothness floors hold; each stop gets a
+      // well-learned focus (camera/focus.ts).
+      {
+        const stop = snapToStop(zoom.hfovDeg, zoomStopsHfov(cfg.zoom));
         if (stop !== zoom.hfovDeg) {
           zoom.hfovDeg = stop;
           zoom.zoomUnits = zoomUnitsFromHfov(stop, cfg.zoom.fovLut);

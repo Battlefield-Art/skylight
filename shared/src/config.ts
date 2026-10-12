@@ -170,6 +170,16 @@ export interface TrackerConfig {
      */
     rateFloorDegPerDps: number;
     rateFloorMaxDeg: number;
+    /**
+     * Zoom STOPS, lens units: every zoom command snaps to one of these (never
+     * tighter than wanted). The lens re-focuses (zoom tracking, then the
+     * focus servo at ~90 units/s) after every zoom move, so a framing that
+     * creeps through in-between values keeps the picture soft; a few fixed
+     * stops each get a well-learned focus (camera/focus.ts). Empty = stops
+     * every `stopRatio` in HFOV from tele to wide.
+     */
+    stopUnits: number[];
+    stopRatio: number;
   };
   vision: {
     /** Run the in-frame plane detector while tracking. */
@@ -529,6 +539,8 @@ export const DEFAULT_CONFIG: Config = {
       ],
       rateFloorDegPerDps: 2.5,
       rateFloorMaxDeg: 12,
+      stopUnits: [],
+      stopRatio: 1.3,
     },
     vision: {
       enabled: true,
