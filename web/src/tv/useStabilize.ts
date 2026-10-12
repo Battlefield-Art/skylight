@@ -38,7 +38,7 @@ export interface StabilizeOpts {
 const TRACK_TIMEOUT_MS = 1500;
 
 export function useStabilize(
-  videoRef: MutableRefObject<HTMLVideoElement | null>,
+  videoRef: MutableRefObject<HTMLElement | null>,
   detection: TrackerState["vision"]["detection"] | undefined,
   opts: StabilizeOpts = {},
 ): void {

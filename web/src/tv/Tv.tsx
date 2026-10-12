@@ -10,6 +10,8 @@ import {
   levelingTransform,
   mountFrameFromWorld,
   norm180,
+  worldFromMount,
+  DEFAULT_CONFIG,
   type Aircraft,
 } from "@shared/index.js";
 import { useStream } from "../lib/useStream.js";
@@ -17,6 +19,8 @@ import { useTracker } from "../tracker/useTracker.js";
 import { useLiveVideo } from "../tracker/useLiveVideo.js";
 import { useMse } from "./useMse.js";
 import { useStabilize } from "./useStabilize.js";
+import { useDelayed, useLiveStab } from "./liveStab/useLiveStab.js";
+import type { StabFrameInfo } from "./liveStab/LiveStabilizer.js";
 import { SkyPolar } from "../tracker/components/SkyPolar.js";
 import { SfoGroundPanel } from "./SfoGround.js";
 
@@ -86,27 +90,77 @@ function NextUp({ next, eta }: { next: NextPlaneState | null | undefined; eta: n
   );
 }
 
+/** SVG path of the four lock-bracket corners around (cx, cy) in the 1600×900 overlay. */
+function bracketPath(cx: number, cy: number, w: number, h: number): string {
+  const x = cx - w / 2;
+  const y = cy - h / 2;
+  const cl = Math.min(18, w / 3);
+  return (
+    `M ${x} ${y + cl} V ${y} H ${x + cl} ` +
+    `M ${x + w - cl} ${y} H ${x + w} V ${y + cl} ` +
+    `M ${x + w} ${y + h - cl} V ${y + h} H ${x + w - cl} ` +
+    `M ${x + cl} ${y + h} H ${x} V ${y + h - cl}`
+  );
+}
+
 export function Tv() {
   const { stream } = useTracker();
   const { state: serverState } = useStream("display");
-  const { state, config } = stream;
+  const { state: liveState, config } = stream;
   // Primary: H.264 passthrough via MediaSource (native quality, 30 fps).
   // Fallback: the MJPEG stream, when MSE is unsupported or keeps failing.
-  const mse = useMse(stream.connected, state?.video);
-  const liveVideo = useLiveVideo(stream.connected, mse.ok ? undefined : state?.video);
-  // Digital crop-follow (re-centre the video on the vision detection). OFF by
-  // default since 2026-10-10: with the motor now tracking smoothly it did more
-  // harm than good — every hop of the detection box re-centred the whole
-  // picture, which read as camera shake on the stream while the raw feed was
-  // steady. ?stab=1 re-enables it.
-  const stabOn = new URLSearchParams(window.location.search).get("stab") === "1";
+  const mse = useMse(stream.connected, liveState?.video);
+  const liveVideo = useLiveVideo(stream.connected, mse.ok ? undefined : liveState?.video);
+  const params = new URLSearchParams(window.location.search);
+  // Live stabilization (WebGL, tracker.liveStab): the page opts in with
+  // ?stab=1 (the Twitch stream; it needs a real GPU — not the Pi's TV), and
+  // tracker.liveStab.enabled is the global switch. The video is shown
+  // liveStab.delayMs late, so the plane-in-frame overlays replay as late.
+  const stabCfg = { ...DEFAULT_CONFIG.tracker.liveStab, ...(config?.liveStab ?? {}) };
+  const stabWanted = params.get("stab") === "1" && stabCfg.enabled && mse.ok;
+  // Legacy CSS crop-follow (re-centre on the 10 Hz vision detection). OFF by
+  // default since 2026-10-10 — it read as shake; ?crop=1 re-enables it.
+  const cropOn = params.get("crop") === "1";
   // Level the picture against the horizon (tilted base; tracker.leveling). ?level=0 shows it raw.
-  const levelOn = new URLSearchParams(window.location.search).get("level") !== "0";
+  const levelOn = params.get("level") !== "0";
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bracketRef = useRef<SVGPathElement | null>(null);
+  // Per displayed frame: draw the lock brackets on the plane as found in
+  // THAT frame (exactly in step with the picture). Set via ref; see below.
+  const onStabFrame = useRef<(info: StabFrameInfo) => void>(() => {});
+
+  // Context for the stabilizer comes from the LIVE state (it works on the
+  // newest frame); everything drawn over the picture uses the delayed state.
+  const stabCtx = (() => {
+    const pose = liveState?.pose;
+    if (!pose || !config) return { det: liveState?.vision?.detection ?? null, hfovDeg: null, bottomElDeg: null };
+    const hf = hfovFromZoomUnits(pose.zoomUnits, config.zoom.fovLut);
+    const el = worldFromMount({ panDeg: pose.panDeg, tiltDeg: pose.tiltDeg }, config.mount).elDeg;
+    const roll = config.leveling?.enabled ? Math.abs(displayRollDeg(pose, config.mount, config.leveling)) : 0;
+    const r = (roll * Math.PI) / 180;
+    const half = ((hf * 9) / 16 / 2) * Math.cos(r) + (hf / 2) * Math.sin(r);
+    return { det: liveState?.vision?.detection ?? null, hfovDeg: hf, bottomElDeg: el - half };
+  })();
+  const live = useLiveStab(mse.videoRef, canvasRef, {
+    active: stabWanted,
+    ready: liveState != null && config != null,
+    cfg: stabCfg,
+    ctx: stabCtx,
+    onFrame: (info) => onStabFrame.current(info),
+  });
+  const stabOn = live.running;
+  const state = useDelayed(liveState, live.lagMsRef, stabOn);
+
   const rollDeg =
     levelOn && config?.leveling?.enabled && state?.pose
       ? displayRollDeg(state.pose, config.mount, config.leveling)
       : null;
-  useStabilize(mse.videoRef, state?.vision?.detection, { enabled: mse.ok && stabOn, rollDeg });
+  // Leveling (and the legacy crop-follow) transform whichever element shows
+  // the picture: the stabilized canvas, or the raw video.
+  useStabilize(stabOn ? canvasRef : mse.videoRef, state?.vision?.detection, {
+    enabled: mse.ok && cropOn && !stabOn,
+    rollDeg,
+  });
   /** Frame fraction -> screen fraction under the leveling (16:9 screen). */
   const toScreen = (fx: number, fy: number): { x: number; y: number } => {
     if (rollDeg == null) return { x: fx, y: fy };
@@ -119,8 +173,31 @@ export function Tv() {
       y: 0.5 + (dx * Math.sin(a) + dy * Math.cos(a)) / 9,
     };
   };
+  /** Raw-frame fraction -> screen fraction through the stabilizer's shift/zoom and the leveling. */
+  const frameToScreen = (fx: number, fy: number, info: StabFrameInfo | null = live.infoRef.current) => {
+    if (!stabOn || !info) return toScreen(fx, fy);
+    return toScreen((fx + info.cx - 0.5) * info.zoom + 0.5, (fy + info.cy - 0.5) * info.zoom + 0.5);
+  };
+  const levelScale = rollDeg != null ? levelingTransform(rollDeg).scale : 1;
+  const detNow = state?.vision?.detection;
+  onStabFrame.current = (info) => {
+    const el = bracketRef.current;
+    if (!el) return;
+    const d = detNow && detNow.ageMs < 1500 ? detNow : null;
+    let path = "";
+    if (d && info.plane) {
+      const c = frameToScreen(info.plane.x, info.plane.y, info);
+      const k = levelScale * info.zoom;
+      const w = Math.round(Math.max(46, d.boxW * 1600 * k + 28));
+      const h = Math.round(Math.max(46, d.boxH * 900 * k + 28));
+      path = bracketPath(Math.round(c.x * 16000) / 10, Math.round(c.y * 9000) / 10, w, h);
+    }
+    // touch the DOM only on a real change (each write re-rasterizes the overlay)
+    if (el.getAttribute("d") !== path) el.setAttribute("d", path);
+  };
   const [clock, setClock] = useState("");
-  const nextEta = useCountdown(state?.nextPlane, state?.now);
+  // The countdown is about the future anyway — it runs on the LIVE state.
+  const nextEta = useCountdown(liveState?.nextPlane, liveState?.now);
   const [fps, setFps] = useState<number | null>(null);
 
   // Measured playback rate via requestVideoFrameCallback (where supported).
@@ -196,7 +273,6 @@ export function Tv() {
   const det = state.vision.detection;
   // ?route=0 hides origin/destination — for live-streaming this page (the
   // route data is too unreliable to broadcast). The living-room TV keeps it.
-  const params = new URLSearchParams(window.location.search);
   const showRoute = params.get("route") !== "0";
   // ?ground=0 hides the SFO surface panel.
   const showGround = params.get("ground") !== "0";
@@ -215,6 +291,14 @@ export function Tv() {
         autoPlay
         playsInline
       />
+      {/* Stabilized picture (delayed): covers the raw video while running. */}
+      {stabWanted && (
+        <canvas
+          ref={canvasRef}
+          className="tv-video tv-stab"
+          style={stabOn ? undefined : { visibility: "hidden" }}
+        />
+      )}
       {!mse.ok && (
         <img
           key={liveVideo.epoch}
@@ -230,22 +314,18 @@ export function Tv() {
         {/* center marker: a single plain white dot */}
         <circle cx="800" cy="450" r="3" fill="#fff" opacity="0.85" />
 
-        {det && det.ageMs < 1500 && (() => {
+        {stabOn ? (
+          // positioned per video frame by onStabFrame
+          <g className="lock"><path ref={bracketRef} d="" /></g>
+        ) : det && det.ageMs < 1500 && (() => {
           // Frame-space position, carried through the video's leveling (the
           // brackets themselves stay square to the screen).
           const c = toScreen(det.boxX + det.boxW / 2, det.boxY + det.boxH / 2);
-          const k = rollDeg != null ? levelingTransform(rollDeg).scale : 1;
-          const w = Math.max(46, det.boxW * 1600 * k + 28);
-          const h = Math.max(46, det.boxH * 900 * k + 28);
-          const x = c.x * 1600 - w / 2;
-          const y = c.y * 900 - h / 2;
-          const cl = Math.min(18, w / 3);
+          const w = Math.max(46, det.boxW * 1600 * levelScale + 28);
+          const h = Math.max(46, det.boxH * 900 * levelScale + 28);
           return (
             <g className="lock">
-              <path d={`M ${x} ${y + cl} V ${y} H ${x + cl}`} />
-              <path d={`M ${x + w - cl} ${y} H ${x + w} V ${y + cl}`} />
-              <path d={`M ${x + w} ${y + h - cl} V ${y + h} H ${x + w - cl}`} />
-              <path d={`M ${x + cl} ${y + h} H ${x} V ${y + h - cl}`} />
+              <path d={bracketPath(c.x * 1600, c.y * 900, w, h)} />
             </g>
           );
         })()}
@@ -253,8 +333,8 @@ export function Tv() {
         {overlay && !det && (
           <circle
             className="tv-pred"
-            cx={Math.min(1560, Math.max(40, toScreen(overlay.x, overlay.y).x * 1600))}
-            cy={Math.min(860, Math.max(40, toScreen(overlay.x, overlay.y).y * 900))}
+            cx={Math.min(1560, Math.max(40, frameToScreen(overlay.x, overlay.y).x * 1600))}
+            cy={Math.min(860, Math.max(40, frameToScreen(overlay.x, overlay.y).y * 900))}
             r="26"
           />
         )}
@@ -282,7 +362,7 @@ export function Tv() {
       <aside className="tv-radar">
         <div className="tv-radar-title">RADAR · {state.candidates.length} IN RANGE</div>
         <SkyPolar state={state} config={config} onPick={() => {}} />
-        <NextUp next={state.nextPlane} eta={nextEta} />
+        <NextUp next={liveState?.nextPlane} eta={nextEta} />
       </aside>
 
       {/* SFO surface traffic — who's taxiing / next up */}
@@ -334,12 +414,12 @@ export function Tv() {
         ) : (
           <>
             <div className="tv-card-tag scanning">SCANNING</div>
-            {state.nextPlane && nextEta != null ? (
+            {liveState?.nextPlane && nextEta != null ? (
               <>
                 <div className="tv-countdown">{nextEta < 1 ? "NOW" : fmtEta(nextEta)}</div>
                 <div className="tv-idle-sub">
-                  next plane: {state.nextPlane.flight ?? state.nextPlane.hex}
-                  {state.nextPlane.typeCode ? ` · ${state.nextPlane.typeCode}` : ""} · from the {compass(state.nextPlane.azDeg)}
+                  next plane: {liveState.nextPlane.flight ?? liveState.nextPlane.hex}
+                  {liveState.nextPlane.typeCode ? ` · ${liveState.nextPlane.typeCode}` : ""} · from the {compass(liveState.nextPlane.azDeg)}
                 </div>
               </>
             ) : (

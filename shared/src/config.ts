@@ -254,6 +254,36 @@ export interface TrackerConfig {
     maxRollDeg: number;
   };
 
+  /**
+   * Live video stabilization on the TV/stream page (WebGL; needs a real GPU —
+   * the Twitch box, not the Pi). A page opts in with ?stab=1; `enabled` is the
+   * global switch (POST /api/config turns it off live). The page finds the
+   * plane in every video frame, smooths its path with a centred Gaussian that
+   * looks `delayMs` into the future, and shows the video `delayMs` late,
+   * shifted onto the smooth path. Overlays are replayed equally late.
+   */
+  liveStab: {
+    enabled: boolean;
+    /** Look-ahead = extra display delay, ms (1500 measured −61..−75% wobble). */
+    delayMs: number;
+    /** Gaussian sigma of the smoothed path, ms. */
+    sigmaMs: number;
+    /** Stabilize only at or below this HFOV, deg (wide = weak detections). */
+    maxHfovDeg: number;
+    /** Never shift the picture more than this fraction of the frame. */
+    maxShiftFrac: number;
+    /** Exposed edge: "fill" (flat-field + soft sky fill), "crop" (zoom in to
+     *  hide it), "auto" (fill on open sky, crop when skyline/texture shows). */
+    edge: "auto" | "fill" | "crop";
+    /** auto: fill only while the frame's bottom edge is above this elevation, deg. */
+    fillMinElDeg: number;
+    /** Largest crop zoom in crop mode. */
+    maxCropZoom: number;
+    /** Fade in/out time when the plane is found/lost (uses the look-ahead,
+     *  so the fade starts before a loss), ms. */
+    fadeMs: number;
+  };
+
   /** Idle "ready position" when auto mode has no target. */
   home: {
     enabled: boolean;
@@ -580,6 +610,17 @@ export const DEFAULT_CONFIG: Config = {
       offAboveElDeg: 60,
       maxRollDeg: 25,
     },
+    liveStab: {
+      enabled: true,
+      delayMs: 1500,
+      sigmaMs: 750,
+      maxHfovDeg: 12,
+      maxShiftFrac: 0.15,
+      edge: "auto",
+      fillMinElDeg: 8,
+      maxCropZoom: 1.45,
+      fadeMs: 1000,
+    },
     home: {
       enabled: true,
       mode: "sfo",
@@ -643,6 +684,7 @@ export function mergeTrackerConfig(
     zoom: { ...base.zoom, ...(patch.zoom ?? {}) },
     vision: withoutKeys({ ...base.vision, ...(patch.vision ?? {}) }, RETIRED_TRACKER_KEYS.vision),
     leveling: { ...base.leveling, ...(patch.leveling ?? {}) },
+    liveStab: { ...base.liveStab, ...(patch.liveStab ?? {}) },
     home: { ...base.home, ...(patch.home ?? {}) },
   } as TrackerConfig;
 }
