@@ -59,6 +59,20 @@ def _y_plane(frame: av.VideoFrame) -> np.ndarray:
     return a[: frame.height]
 
 
+
+def monotonic_frames(frames):
+    """Yield decoded frames with strictly increasing PTS. A corrupt packet in
+    the Pi's relayed fMP4 can make the decoder emit a frame stamped ~0.8 s in
+    the past (20261012T214018Z-a72886: one back-step in 1036 frames); every
+    pass of the pipeline drops the same stale frames, so analysis, render and
+    re-measure stay keyed to identical PTS."""
+    last = None
+    for fr in frames:
+        if fr.pts is None or (last is not None and fr.pts <= last):
+            continue
+        last = fr.pts
+        yield fr
+
 def analyse(path: str, threads: int = 2, sample_every: int = 6) -> Analysis:
     c, s = _open(path, threads)
     tb = s.time_base
@@ -68,7 +82,7 @@ def analyse(path: str, threads: int = 2, sample_every: int = 6) -> Analysis:
     pts, px, py, pw, ph, edge = [], [], [], [], [], []
     samples = []
     width = height = 0
-    for i, fr in enumerate(c.decode(s)):
+    for i, fr in enumerate(monotonic_frames(c.decode(s))):
         if fr.pts is None:
             continue
         width, height = fr.width, fr.height
@@ -249,7 +263,7 @@ def render(src: str, dst: str, shifts: dict[int, tuple[float, float]], vig_coeff
     Vc = cv2.resize(Vy, (W // 2, H // 2), interpolation=cv2.INTER_AREA)
     wy, wc = PlaneWarper(Vy, 16.0), PlaneWarper(Vc, 128.0)
     n = shifted = 0
-    for fr in ic.decode(ist):
+    for fr in monotonic_frames(ic.decode(ist)):
         if fr.pts is None:
             continue
         dx, dy = shifts.get(fr.pts, (0.0, 0.0))
@@ -287,7 +301,7 @@ def track(path: str, threads: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarr
     c, s = _open(path, threads)
     tr = PlaneTracker()
     pts, xs, ys = [], [], []
-    for fr in c.decode(s):
+    for fr in monotonic_frames(c.decode(s)):
         if fr.pts is None:
             continue
         r = tr(grey_small(_y_plane(fr)))
