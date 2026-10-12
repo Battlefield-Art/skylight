@@ -2,7 +2,7 @@
 // reticle, viewfinder corner brackets, an oversized glass radar, and the
 // skylightceiling.com wordmark built into the frame. Lean-back, no controls.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   hfovFromZoomUnits,
   metersToMiles,
@@ -31,18 +31,40 @@ function routeLine(ac: Aircraft | undefined): { from?: string; to?: string } {
 type NextPlaneState = NonNullable<import("@shared/index.js").TrackerState["nextPlane"]>;
 
 /** Seconds left until the next plane, ticking locally between updates. */
+/**
+ * Seconds until the next plane is on screen, ticking smoothly. The tracker
+ * re-estimates every second; displaying each estimate directly made the
+ * count stutter (2-s steps, small back-and-forth). Instead anchor an arrival
+ * time on THIS clock and count down to it, nudging the anchor gently toward
+ * new estimates and re-anchoring only on a real change (> 2 s, or a new plane).
+ */
 function useCountdown(next: NextPlaneState | null | undefined, stateNow: number | undefined): number | null {
   const [, setTick] = useState(0);
+  const anchor = useRef<{ hex: string; at: number } | null>(null);
+  const seen = useRef<number | null>(null);
+  const offset = useRef(0);
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setTick((t) => t + 1), 250);
     return () => clearInterval(id);
   }, []);
-  if (!next || stateNow == null) return null;
-  return Math.max(0, next.etaSec - (Date.now() - stateNow) / 1000);
+  if (!next || stateNow == null) {
+    anchor.current = null;
+    return null;
+  }
+  if (seen.current !== stateNow) {
+    // A fresh estimate: map the tracker's clock onto ours.
+    seen.current = stateNow;
+    offset.current = Date.now() - stateNow;
+    const at = stateNow + offset.current + next.etaSec * 1000;
+    const a = anchor.current;
+    if (!a || a.hex !== next.hex || Math.abs(at - a.at) > 2000) anchor.current = { hex: next.hex, at };
+    else a.at += (at - a.at) * 0.1;
+  }
+  return Math.max(0, (anchor.current!.at - Date.now()) / 1000);
 }
 
 function fmtEta(sec: number): string {
-  const s = Math.round(sec);
+  const s = Math.ceil(sec);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 

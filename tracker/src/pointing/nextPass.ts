@@ -97,35 +97,57 @@ export function nextPlane(
 ): NextPlane | null {
   const cur0: CurrentTarget | null =
     typeof current === "string" ? { hex: current, sinceMs: now - 3_600_000 } : current;
+  const fleetAt = (t: number) => aircraft.flatMap((a) => {
+    const p = project(a, now, t);
+    return p ? [p] : [];
+  });
+  const visibleAt = (fleet: Aircraft[], hex: string) => {
+    const ac = fleet.find((a) => a.hex === hex);
+    const geo = ac && aircraftGeoPoint(ac);
+    if (!ac || !geo) return null;
+    const p = azElFromSite(site, geo);
+    const ok = p.elDeg >= horizonMinEl(horizon, p.azDeg, -90) + 1 && p.elDeg >= c.minElevationDeg;
+    return ok ? { ac, p } : null;
+  };
+  /** Would the selector (from `sim`) have switched to a new plane at t? */
+  const pickAt = (fleet: Aircraft[], t: number, sim: CurrentTarget | null) => {
+    const sel = selectTarget(fleet, site, now + t * 1000, sim, mode, c, undefined, undefined, horizon, sun, airport);
+    return { sel, hex: sel.hex && sel.hex !== cur0?.hex ? sel.hex : null };
+  };
   let sim: CurrentTarget | null = cur0;
   let picked: { hex: string; t: number; departure: boolean } | null = null;
   for (let t = 0; t <= HORIZON_SEC; t += STEP_SEC) {
-    const tNow = now + t * 1000;
-    const fleet = aircraft.flatMap((a) => {
-      const p = project(a, now, t);
-      return p ? [p] : [];
-    });
-    const sel = selectTarget(fleet, site, tNow, sim, mode, c, undefined, undefined, horizon, sun, airport);
-    const hex = sel.hex;
+    const fleet = fleetAt(t);
+    const pickedBefore = picked;
     if (!picked) {
-      if (hex && hex !== cur0?.hex) {
+      const { sel, hex } = pickAt(fleet, t, sim);
+      if (hex) {
         picked = { hex, t, departure: sel.candidates.find((x) => x.hex === hex)?.note === "departure" };
       } else {
-        sim = hex ? (sim?.hex === hex ? sim : { hex, sinceMs: tNow }) : null;
+        sim = sel.hex ? (sim?.hex === sel.hex ? sim : { hex: sel.hex, sinceMs: now + t * 1000 }) : null;
         continue;
       }
     }
-    // Picked: on screen once it is also clear of the skyline.
-    const ac = fleet.find((a) => a.hex === picked!.hex);
-    const geo = ac && aircraftGeoPoint(ac);
-    if (!ac || !geo) continue;
-    const p = azElFromSite(site, geo);
-    if (p.elDeg >= horizonMinEl(horizon, p.azDeg, -90) + 1 && p.elDeg >= c.minElevationDeg) {
-      return {
-        hex: ac.hex, flight: ac.flight, typeCode: ac.typeCode, typeName: ac.typeName,
-        etaSec: t, azDeg: p.azDeg, departure: picked.departure,
-      };
+    const vis = visibleAt(fleet, picked.hex);
+    if (!vis) continue;
+    // On screen within (t − STEP, t]: bisect to ~0.25 s so the ETA isn't
+    // quantised to the 2-s step (the stream countdown jumped by 2 s).
+    let lo = Math.max(0, t - STEP_SEC);
+    let hi = t;
+    if (t > 0) {
+      for (let k = 0; k < 3; k++) {
+        const mid = (lo + hi) / 2;
+        const f = fleetAt(mid);
+        const ok =
+          (pickedBefore != null || pickAt(f, mid, sim).hex === picked.hex) && visibleAt(f, picked.hex) != null;
+        if (ok) hi = mid;
+        else lo = mid;
+      }
     }
+    return {
+      hex: vis.ac.hex, flight: vis.ac.flight, typeCode: vis.ac.typeCode, typeName: vis.ac.typeName,
+      etaSec: Math.round(hi * 10) / 10, azDeg: vis.p.azDeg, departure: picked.departure,
+    };
   }
   return null;
 }
