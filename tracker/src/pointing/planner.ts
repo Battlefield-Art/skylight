@@ -31,11 +31,13 @@ export const ZENITH_PASS_EL = 82;
  * (observed: a 140° swing in 4 s that overshot into the ±175° stop) — that
  * is a whip-pan, not tracking. Park on the exit side and let it fly through.
  */
-export const ZENITH_PAN_RATE_DPS = 40;
-// (22 parked too eagerly: for a pass peaking at 72-75° the predicted exit
-// azimuth was 40-60° off — the el-70 crossing sits where the azimuth changes
-// fastest — so the head waited in the wrong place and lost the plane for
-// 7 s. Up to ~40°/s the loop can sweep through continuously.)
+export const ZENITH_PAN_RATE_DPS = 25;
+// (22 once parked too eagerly: a pass peaking at 72-75° parked on the el-70
+// exit azimuth, 40-60° off the plane — the exit line sits where the azimuth
+// changes fastest. A pass peaking below the hold elevation now parks AT its
+// closest-approach point instead, so the threshold could come back down:
+// at 40 the loop chased UAL875 (36°/s, 2026-10-12, 390 m slant) and fell
+// 15-19° behind through the crossing, then overshot 30°.)
 /** While the target is above this elevation we are "in the crossing". */
 export const ZENITH_REGIME_EL = 72;
 /**
@@ -190,13 +192,14 @@ export function planPass(
     // ZENITH_HOLD_TILT is a MECHANICAL tilt (the auto-flip guard): on the
     // wedge the tilt zero sits ~10° below the mount horizon, so a head-frame
     // 84° would ask for an unreachable ~95° tilt.
-    holdAzEl: wrap
-      ? worldFromMountFrame(
-          outboundAz ?? caAz,
-          ZENITH_HOLD_TILT * wrap.mount.tiltGain + wrap.mount.tiltOffsetDeg,
-          wrap.mount,
-        )
-      : { azDeg: outboundAz ?? caAz, elDeg: ZENITH_HOLD_TILT },
+    holdAzEl: (() => {
+      // Through the pole (peak above the hold elevation): wait just under
+      // vertical on the exit side. A fast pass that peaks LOWER: wait on the
+      // closest-approach point itself — it flies through the frame centre.
+      const holdEl = wrap ? ZENITH_HOLD_TILT * wrap.mount.tiltGain + wrap.mount.tiltOffsetDeg : ZENITH_HOLD_TILT;
+      const [az, el] = elMax >= holdEl ? [outboundAz ?? caAz, holdEl] : [caAz, elMax];
+      return wrap ? worldFromMountFrame(az, el, wrap.mount) : { azDeg: az, elDeg: el };
+    })(),
     caAzDeg: caAz,
     wrapInSec: wrapOut !== null ? wrapIn : null,
     wrapOutSec: wrapOut,
