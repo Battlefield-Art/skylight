@@ -6,8 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   hfovFromZoomUnits,
   metersToMiles,
+  displayRollDeg,
+  levelingTransform,
+  mountFrameFromWorld,
   norm180,
-  worldFromMount,
   type Aircraft,
 } from "@shared/index.js";
 import { useStream } from "../lib/useStream.js";
@@ -76,7 +78,25 @@ export function Tv() {
   // picture, which read as camera shake on the stream while the raw feed was
   // steady. ?stab=1 re-enables it.
   const stabOn = new URLSearchParams(window.location.search).get("stab") === "1";
-  useStabilize(mse.videoRef, state?.vision?.detection, { enabled: mse.ok && stabOn });
+  // Level the picture against the horizon (tilted base; tracker.leveling). ?level=0 shows it raw.
+  const levelOn = new URLSearchParams(window.location.search).get("level") !== "0";
+  const rollDeg =
+    levelOn && config?.leveling?.enabled && state?.pose
+      ? displayRollDeg(state.pose, config.mount, config.leveling)
+      : null;
+  useStabilize(mse.videoRef, state?.vision?.detection, { enabled: mse.ok && stabOn, rollDeg });
+  /** Frame fraction -> screen fraction under the leveling (16:9 screen). */
+  const toScreen = (fx: number, fy: number): { x: number; y: number } => {
+    if (rollDeg == null) return { x: fx, y: fy };
+    const t = levelingTransform(rollDeg);
+    const a = (t.rotateDeg * Math.PI) / 180;
+    const dx = (fx - 0.5) * 16 * t.scale;
+    const dy = (fy - 0.5) * 9 * t.scale;
+    return {
+      x: 0.5 + (dx * Math.cos(a) - dy * Math.sin(a)) / 16,
+      y: 0.5 + (dx * Math.sin(a) + dy * Math.cos(a)) / 9,
+    };
+  };
   const [clock, setClock] = useState("");
   const nextEta = useCountdown(state?.nextPlane, state?.now);
   const [fps, setFps] = useState<number | null>(null);
@@ -131,13 +151,15 @@ export function Tv() {
 
   const overlay = useMemo(() => {
     if (!state?.pose || !config || !target?.predicted) return null;
-    const aim = worldFromMount(state.pose, config.mount);
+    // Head frame: the picture's axes are the pan/tilt axes, not world az/el.
+    const m = config.mount;
+    const azM = state.pose.panDeg * m.panGain + m.panOffsetDeg;
+    const elM = state.pose.tiltDeg * m.tiltGain + m.tiltOffsetDeg;
+    const p = mountFrameFromWorld(target.predicted.azDeg, target.predicted.elDeg, m);
     const hfov = hfovFromZoomUnits(state.pose.zoomUnits, config.zoom.fovLut);
     const vfov = hfov * (9 / 16);
-    const dxDeg =
-      norm180(target.predicted.azDeg - aim.azDeg) *
-      Math.cos((target.predicted.elDeg * Math.PI) / 180);
-    const dyDeg = target.predicted.elDeg - aim.elDeg;
+    const dxDeg = norm180(p.azDeg - azM) * Math.cos((elM * Math.PI) / 180) * (Math.sign(m.panGain) || 1);
+    const dyDeg = p.elDeg - elM;
     return { x: 0.5 + dxDeg / hfov, y: 0.5 - dyDeg / vfov };
   }, [state, config, target]);
 
@@ -187,17 +209,21 @@ export function Tv() {
         <circle cx="800" cy="450" r="3" fill="#fff" opacity="0.85" />
 
         {det && det.ageMs < 1500 && (() => {
-          const x = det.boxX * 1600 - 14;
-          const y = det.boxY * 900 - 14;
-          const w = Math.max(46, det.boxW * 1600 + 28);
-          const h = Math.max(46, det.boxH * 900 + 28);
-          const c = Math.min(18, w / 3);
+          // Frame-space position, carried through the video's leveling (the
+          // brackets themselves stay square to the screen).
+          const c = toScreen(det.boxX + det.boxW / 2, det.boxY + det.boxH / 2);
+          const k = rollDeg != null ? levelingTransform(rollDeg).scale : 1;
+          const w = Math.max(46, det.boxW * 1600 * k + 28);
+          const h = Math.max(46, det.boxH * 900 * k + 28);
+          const x = c.x * 1600 - w / 2;
+          const y = c.y * 900 - h / 2;
+          const cl = Math.min(18, w / 3);
           return (
             <g className="lock">
-              <path d={`M ${x} ${y + c} V ${y} H ${x + c}`} />
-              <path d={`M ${x + w - c} ${y} H ${x + w} V ${y + c}`} />
-              <path d={`M ${x + w} ${y + h - c} V ${y + h} H ${x + w - c}`} />
-              <path d={`M ${x + c} ${y + h} H ${x} V ${y + h - c}`} />
+              <path d={`M ${x} ${y + cl} V ${y} H ${x + cl}`} />
+              <path d={`M ${x + w - cl} ${y} H ${x + w} V ${y + cl}`} />
+              <path d={`M ${x + w} ${y + h - cl} V ${y + h} H ${x + w - cl}`} />
+              <path d={`M ${x + cl} ${y + h} H ${x} V ${y + h - cl}`} />
             </g>
           );
         })()}
@@ -205,8 +231,8 @@ export function Tv() {
         {overlay && !det && (
           <circle
             className="tv-pred"
-            cx={Math.min(1560, Math.max(40, overlay.x * 1600))}
-            cy={Math.min(860, Math.max(40, overlay.y * 900))}
+            cx={Math.min(1560, Math.max(40, toScreen(overlay.x, overlay.y).x * 1600))}
+            cy={Math.min(860, Math.max(40, toScreen(overlay.x, overlay.y).y * 900))}
             r="26"
           />
         )}

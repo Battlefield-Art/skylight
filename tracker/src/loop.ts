@@ -18,6 +18,7 @@ import {
   fixAgeSec,
   fixTimeMs,
   hfovFromZoomUnits,
+  mountFrameFromWorld,
   mountFromWorld,
   norm180,
   SAME_FIX_MS,
@@ -63,10 +64,9 @@ import {
   estimateShift,
   compensatedResidual,
   findMovingBlobs,
-  maskBelowHorizon,
-  maskBelowSkyline,
 } from "./vision/motion.js";
 import { lockVelTolerance, TrackTable, type WorldObs } from "./vision/tracks.js";
+import { frameGeom, maskBelowWorld } from "./vision/frame.js";
 import type { Recorder } from "./record.js";
 import type { Upstream } from "./upstream.js";
 import type { VideoStream } from "./video/stream.js";
@@ -283,7 +283,7 @@ export class ControlLoop {
   private lastAutoCalAt = 0;
   /** Previous vision frame (luma) + its pose, for motion-compensated diffing. */
   private prevLuma: Uint8Array | null = null;
-  private prevAim: { azDeg: number; elDeg: number; hfov: number } | null = null;
+  private prevAim: { azDeg: number; elDeg: number; azM: number; elM: number; hfov: number } | null = null;
   /** Since when the detection has been continuously near center (0 = not). */
   private visionGoodSince = 0;
   /** Since when the lock has been off-centre / motion-inconsistent / absent
@@ -741,7 +741,7 @@ export class ControlLoop {
     }
   }
 
-  /** Bias corrections sampled while locked this pass (az, el deg). */
+  /** Bias corrections sampled while locked this pass, head frame (mount az, el deg). */
   private passBias: { az: number; el: number }[] = [];
   private biasSampleAt = 0;
   /** Recent passes' median corrections, newest last. */
@@ -924,7 +924,8 @@ export class ControlLoop {
         panMinDeg: cfg.limits.panMinDeg,
         panMaxDeg: cfg.limits.panMaxDeg,
       });
-      const hold = zenithHold(plan, prediction.azEl.elDeg, this.zenithLatched);
+      const headEl = mountFrameFromWorld(prediction.azEl.azDeg, prediction.azEl.elDeg, cfg.mount).elDeg;
+      const hold = zenithHold(plan, headEl, this.zenithLatched);
       if (hold?.phase === "park") this.zenithLatched = true;
       else if (!hold && this.zenithLatched) {
         this.zenithLatched = false; // released: cone left
@@ -1111,10 +1112,14 @@ export class ControlLoop {
         now - this.visionGoodSince > 800;
       // Per-pass bias evidence for the drift fold-in (see foldPassBias).
       if (visionLocked && now - this.biasSampleAt > 500) {
-        const elB = prediction.azEl.elDeg;
-        if (elB >= 20 && elB <= 75) {
+        // Kept in the HEAD frame — what the mount offsets act on. On the
+        // tilted base a world-el correction is part pan, part tilt.
+        const t = prediction.nowAzEl;
+        const p0 = mountFrameFromWorld(t.azDeg, t.elDeg, cfg.mount);
+        const p1 = mountFrameFromWorld(t.azDeg + this.corrAz, t.elDeg + this.corrEl, cfg.mount);
+        if (prediction.azEl.elDeg >= 20 && p0.elDeg >= 20 && p0.elDeg <= 75) {
           this.biasSampleAt = now;
-          this.passBias.push({ az: this.corrAz, el: this.corrEl });
+          this.passBias.push({ az: norm180(p1.azDeg - p0.azDeg), el: p1.elDeg - p0.elDeg });
         }
       }
       // Pointing sigma: any FRESH, motion-consistent lock means vision is
@@ -1911,17 +1916,16 @@ export class ControlLoop {
     let exY = 0.5;
     const lockedBefore = this.tracks.lockedTrack();
     const atPre = this.aimAt(frameT);
+    const geomNow = frameGeom(pose, cfg.mount, hfov);
     if (lockedBefore && atPre) {
       const p = lockedBefore.positionAt(frameT);
-      const cosE = Math.max(0.2, Math.cos((atPre.aimEl * Math.PI) / 180));
-      exX = clamp01(0.5 + (norm180(p.azDeg - atPre.aimAz) * cosE * sign) / atPre.hfov);
-      exY = clamp01(0.5 - (p.elDeg - atPre.aimEl) / (atPre.hfov * (9 / 16)));
+      const e = frameGeom(atPre, cfg.mount, atPre.hfov).toFrame(p.azDeg, p.elDeg);
+      exX = clamp01(e.cx);
+      exY = clamp01(e.cy);
     } else if (predicted) {
-      const dAz =
-        norm180(predicted.azDeg - aim.azDeg) *
-        Math.cos((predicted.elDeg * Math.PI) / 180);
-      exX = clamp01(0.5 + dAz / hfov);
-      exY = clamp01(0.5 - (predicted.elDeg - aim.elDeg) / vfov);
+      const e = geomNow.toFrame(predicted.azDeg, predicted.elDeg);
+      exX = clamp01(e.cx);
+      exY = clamp01(e.cy);
     }
 
     this.visionBusy = true;
@@ -1941,21 +1945,22 @@ export class ControlLoop {
         // Seed the background-shift search with the known aim delta between the
         // two frames (camera moves -> world shifts the opposite way in frame);
         // a tiny ±6 px refine absorbs pose lag / lens distortion.
-        const cosE0 = Math.max(0.2, Math.cos((aim.elDeg * Math.PI) / 180));
+        // Head-frame (pixel-axis) delta: on the tilted base the world az/el
+        // delta points the wrong way in the rolled picture.
+        const cosE0 = Math.max(0.2, Math.cos((geomNow.elM * Math.PI) / 180));
         const seedDx = Math.round(
-          ((-norm180(aim.azDeg - prevAim.azDeg) * cosE0 * sign) / Math.max(1, hfov)) * VISION_W,
+          ((-norm180(geomNow.azM - prevAim.azM) * cosE0 * sign) / Math.max(1, hfov)) * VISION_W,
         );
-        const seedDy = Math.round(((aim.elDeg - prevAim.elDeg) / Math.max(1, vfov)) * VISION_H);
+        const seedDy = Math.round(((geomNow.elM - prevAim.elM) / Math.max(1, vfov)) * VISION_H);
         const shift = estimateShift(prev, cur, VISION_W, VISION_H, seedDx, seedDy, 6);
         const resid = compensatedResidual(prev, cur, VISION_W, VISION_H, shift);
         // The plane is always above the horizon; drop the ground (known from
         // tilt) so rooftops/poles/trees never become false movers.
-        maskBelowHorizon(resid, VISION_W, VISION_H, aim.elDeg, vfov, 2);
-        if (cfg.limits.horizon?.length) {
-          const hz = cfg.limits.horizon;
-          maskBelowSkyline(resid, VISION_W, VISION_H, aim.azDeg, aim.elDeg, hfov, vfov,
-            (az) => horizonMinEl(hz, az, -90), sign);
-        }
+        // Evaluated per cell in the WORLD frame, so the mask follows the
+        // slanted horizon of a rolled picture.
+        const hz = cfg.limits.horizon;
+        maskBelowWorld(resid, VISION_W, VISION_H, geomNow,
+          hz?.length ? (az) => Math.max(-2, horizonMinEl(hz, az, -90)) : () => -2);
         const rawBlobs = findMovingBlobs(resid, VISION_W, VISION_H, 5, {
           expectedX: exX,
           expectedY: exY,
@@ -2019,7 +2024,7 @@ export class ControlLoop {
       }
       // Roll the frame buffer forward for the next tick's diff.
       this.prevLuma = cur;
-      this.prevAim = { azDeg: aim.azDeg, elDeg: aim.elDeg, hfov };
+      this.prevAim = { azDeg: aim.azDeg, elDeg: aim.elDeg, azM: geomNow.azM, elM: geomNow.elM, hfov };
 
       const now = Date.now();
       const atFrame = this.aimAt(frameT);
@@ -2045,10 +2050,8 @@ export class ControlLoop {
       const hfovF = atFrame.hfov;
       const elF = atFrame.aimEl;
       const cosE = Math.max(0.2, Math.cos((elF * Math.PI) / 180));
-      const toWorld = (cx: number, cy: number) => ({
-        azDeg: atFrame.aimAz + ((cx - 0.5) * hfovF * sign) / cosE,
-        elDeg: atFrame.aimEl + (0.5 - cy) * hfovF * (9 / 16),
-      });
+      const geomF = frameGeom(atFrame, cfg.mount, hfovF);
+      const toWorld = (cx: number, cy: number) => geomF.toWorld(cx, cy);
       const obs: WorldObs[] = cands.map((c) => {
         const w = toWorld(c.cx, c.cy);
         return {
@@ -2111,8 +2114,7 @@ export class ControlLoop {
         // What the UI / crop-follow see: the SMOOTHED position in frame
         // coordinates (the raw blob hopped around on the stream), with a
         // single-frame hop held back until it persists.
-        const sx = 0.5 + (offAz * cosE * sign) / hfovF;
-        const sy = 0.5 - offElDeg / (hfovF * (9 / 16));
+        const { cx: sx, cy: sy } = geomF.toFrame(smooth.azDeg, smooth.elDeg);
         const prevDet = this.lastDetection;
         const hop = prevDet && now - prevDet.t < 600
           ? Math.hypot(sx - prevDet.cx, (sy - prevDet.cy) * (9 / 16))
@@ -2247,9 +2249,12 @@ export class ControlLoop {
             // A FRESH position only: the "truth" of a sample dead-reckoned
             // from a seconds-old fix is itself degrees off.
             if (ac && ac.altGeom != null && (ac.gs ?? 0) > 80 && fixAgeSec(ac, now) < 2.5) {
+              // Head-frame offset = the pixel offset itself (the lean
+              // cancels), so the sample doesn't depend on the model's lean.
+              const mo = geomF.mountOffset(smooth.azDeg, smooth.elDeg);
               this.autoCal.add({
-                panDeg: atFrame.panDeg + offAz / cfg.mount.panGain,
-                tiltDeg: atFrame.tiltDeg + offElDeg / cfg.mount.tiltGain,
+                panDeg: atFrame.panDeg + mo.dAzM / cfg.mount.panGain,
+                tiltDeg: atFrame.tiltDeg + mo.dElM / cfg.mount.tiltGain,
                 azDeg: atFrame.truthAz,
                 elDeg: atFrame.truthEl,
                 t: now,

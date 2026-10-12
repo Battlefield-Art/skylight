@@ -211,6 +211,22 @@ export interface TrackerConfig {
     autoCalibrate: boolean;
   };
 
+  /**
+   * Picture leveling on the TV/stream pages. On a tilted base (wedge) the
+   * picture is rolled against the horizon by up to ~the lean; the pages
+   * counter-rotate it (and zoom just enough to hide the corners). Faded out
+   * toward overhead, where "level" means nothing and the roll swings fast.
+   */
+  leveling: {
+    enabled: boolean;
+    /** Full correction while the camera looks below this elevation, deg. */
+    fullBelowElDeg: number;
+    /** No correction above this elevation, deg (linear fade between). */
+    offAboveElDeg: number;
+    /** Never rotate the picture more than this, deg (corner zoom grows fast). */
+    maxRollDeg: number;
+  };
+
   /** Idle "ready position" when auto mode has no target. */
   home: {
     enabled: boolean;
@@ -527,6 +543,12 @@ export const DEFAULT_CONFIG: Config = {
       correctionSlewDps: 2.5,
       autoCalibrate: true,
     },
+    leveling: {
+      enabled: true,
+      fullBelowElDeg: 35,
+      offAboveElDeg: 60,
+      maxRollDeg: 25,
+    },
     home: {
       enabled: true,
       mode: "sfo",
@@ -589,6 +611,7 @@ export function mergeTrackerConfig(
     },
     zoom: { ...base.zoom, ...(patch.zoom ?? {}) },
     vision: withoutKeys({ ...base.vision, ...(patch.vision ?? {}) }, RETIRED_TRACKER_KEYS.vision),
+    leveling: { ...base.leveling, ...(patch.leveling ?? {}) },
     home: { ...base.home, ...(patch.home ?? {}) },
   } as TrackerConfig;
 }
