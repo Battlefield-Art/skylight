@@ -40,4 +40,16 @@ describe("nextPlane", () => {
     nextPlane(fleet, site, now, crit, undefined, null, null, null);
     expect(performance.now() - t0).toBeLessThan(150);
   });
+
+  it("sees a departure on its takeoff roll before it lifts off", () => {
+    // Rolling on SFO 28 toward the site (bearing ~298°) at 90 kt.
+    const roll = { hex: "dep1", flight: "DEP1", lat: 37.6125, lon: -122.3595, altGeom: null, altBaro: null, gs: 90, track: 298, baroRate: 0, onGround: true, seen: 0, seenPos: 0, ts: now } as unknown as Aircraft;
+    const sfo = { lat: 37.6213, lon: -122.379 };
+    const n = nextPlane([roll], site, now, crit, undefined, null, sfo, null)!;
+    expect(n).not.toBeNull();
+    expect(n.hex).toBe("dep1");
+    expect(n.departure).toBe(true);
+    expect(n.etaSec).toBeGreaterThan(15); // ~20 s to rotate, then the climb into view
+    expect(n.etaSec).toBeLessThan(90);
+  });
 });

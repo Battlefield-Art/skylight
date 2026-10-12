@@ -54,7 +54,7 @@ import { planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom, snapToStop, zoomStopsHfov } from "./pointing/zoom.js";
-import { FocusController } from "./camera/focus.js";
+import { distanceBand, FocusController } from "./camera/focus.js";
 import { nextPlane, type NextPlane } from "./pointing/nextPass.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
 import { silhouetteCentroid } from "./vision/silhouette.js";
@@ -583,6 +583,18 @@ export class ControlLoop {
       }
     }
     return this.nextPlaneCache.v;
+  }
+
+  /**
+   * Zoom with the focus learned for that zoom and the plane's distance band,
+   * in ONE command when the camera supports it: the lens then arrives sharp
+   * instead of landing 300-1400 units short (its own zoom tracking) and
+   * crawling the rest at ~60 u/s. Unlearned zooms fall back to plain zoom.
+   */
+  private commandZoom(d: CameraDriver, zoomUnits: number, slantM: number | null): void {
+    const f = d.setZoomFocus ? this.focus.learned(zoomUnits, distanceBand(slantM)) : null;
+    if (f != null) d.setZoomFocus!(zoomUnits, f);
+    else d.setZoom(zoomUnits);
   }
 
   /** Sun direction, refreshed every 30 s (it moves ~0.25°/min). */
@@ -1373,7 +1385,9 @@ export class ControlLoop {
         if (a.kind === "auto") d.setFocusInfinity(false);
         else if (a.kind === "manual") d.focusManual ? d.focusManual() : d.setFocusInfinity(true);
         else if (a.kind === "farReference") d.setFocusInfinity(true); // manual + drive to the far stop
-        else if (a.kind === "nudge") d.focusNudge?.(a.deltaUnits);
+        // Zoom-Focus Direct lands the learned point in ~1-2 s; the timed
+        // drive crawls ~60 u/s (6+ s soft after every arrival at tele).
+        else if (a.kind === "nudge") (d.setFocusDirect ? d.setFocusDirect(a.target) : d.focusNudge?.(a.deltaUnits));
         else if (a.kind === "onePush" && cfg.vision.autofocusOnZoom) d.onePushAutofocus();
         if (a.kind === "nudge" || a.kind === "onePush") {
           const extra = a.kind === "nudge" ? { delta: Math.round(a.deltaUnits), target: Math.round(a.target) } : {};
@@ -1645,7 +1659,7 @@ export class ControlLoop {
         // tilt at 9/16 of the pan so both axes hop the same FRACTION.
         d.trackRate(panRate, tiltRate, { rippleDeg, rippleTiltDeg: rippleDeg * (9 / 16) });
         this.pursuing = panRate !== 0 || tiltRate !== 0;
-        d.setZoom(zoom.zoomUnits);
+        this.commandZoom(d, zoom.zoomUnits, prediction?.azEl.slantM ?? null);
         this.recorder.write("command", {
           panRate, tiltRate, errPan, errTilt, zoom: zoom.zoomUnits, mode: "pursue",
           ffPan, ffTilt, iPan: this.panRateI, iTilt: this.tiltRateI,

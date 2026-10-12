@@ -582,7 +582,34 @@ export class ViscaCamera implements CameraDriver {
     const z = Math.min(zoomMax, Math.max(zoomMin, Math.round(zoomUnits)));
     if (this.lastSentZoom !== null && Math.abs(z - this.lastSentZoom) <= 8) return;
     this.lastSentZoom = z;
+    this.lastSentFocus = null; // zoom tracking moves the focus
     this.sendCommand([0x81, 0x01, 0x04, 0x47, ...nibbles(z, 4), 0xff]);
+  }
+
+  private lastSentFocus: number | null = null;
+
+  setZoomFocus(zoomUnits: number, focusUnits: number): void {
+    const zoomMin = Math.min(this.o.units.zoomWideUnits, this.o.units.zoomTeleUnits);
+    const zoomMax = Math.max(this.o.units.zoomWideUnits, this.o.units.zoomTeleUnits);
+    const z = Math.min(zoomMax, Math.max(zoomMin, Math.round(zoomUnits)));
+    const f = Math.round(focusUnits);
+    if (
+      this.lastSentZoom !== null && Math.abs(z - this.lastSentZoom) <= 8 &&
+      this.lastSentFocus !== null && Math.abs(f - this.lastSentFocus) <= 10
+    ) return; // (a one-push sweep since then is left alone until the target moves)
+    if (this.focusFarTimer) { clearTimeout(this.focusFarTimer); this.focusFarTimer = null; }
+    if (this.focusMode !== "manual") this.sendCommand([0x81, 0x01, 0x04, 0x38, 0x03, 0xff]);
+    this.focusMode = "manual";
+    this.lastSentZoom = z;
+    this.lastSentFocus = f;
+    // Focus is signed 16-bit on this lens; nibbles() masks to 0xffff.
+    this.sendCommand([0x81, 0x01, 0x04, 0x47, ...nibbles(z, 4), ...nibbles(f, 4), 0xff]);
+  }
+
+  setFocusDirect(focusUnits: number): void {
+    const z = this.lastSentZoom ?? this.pose?.zoomUnits;
+    if (z == null) return;
+    this.setZoomFocus(z, focusUnits);
   }
 
   /** Focus state: null = unknown (assert on first call). "onepush" means a
@@ -627,6 +654,7 @@ export class ViscaCamera implements CameraDriver {
     if (this.focusFarTimer) { clearTimeout(this.focusFarTimer); this.focusFarTimer = null; }
     if (this.focusMode !== "manual") this.sendCommand([0x81, 0x01, 0x04, 0x38, 0x03, 0xff]);
     this.focusMode = "manual";
+    this.lastSentFocus = null;
     const near = deltaUnits > 0;
     const ms = Math.min(3000, Math.max(60, (Math.abs(deltaUnits) / (near ? 94 : 80)) * 1000));
     this.sendCommand([0x81, 0x01, 0x04, 0x08, near ? 0x37 : 0x27, 0xff]);

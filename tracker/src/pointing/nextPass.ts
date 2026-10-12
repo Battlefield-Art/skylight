@@ -32,11 +32,39 @@ export interface NextPlane {
 const HORIZON_SEC = 300;
 const STEP_SEC = 2;
 
+/** Takeoff-roll model: rotate at ROTATE_KT after accelerating ~ACCEL_KT_S,
+ *  then climb out at CLIMB_KT / CLIMB_FPM (typical SFO jet departures). */
+const ROLL_MIN_KT = 40;
+const ROTATE_KT = 150;
+const ACCEL_KT_S = 3;
+const CLIMB_KT = 170;
+const CLIMB_FPM = 2500;
+
+/** A plane on its takeoff roll, `t` s from now: still rolling, or airborne
+ *  and climbing along the runway heading. Lets the countdown see a departure
+ *  before lift-off (the selector picks it the moment it is airborne). */
+function projectRoll(ac: Aircraft, geo: GeoPoint, now: number, t: number): Aircraft {
+  const gs0 = ac.gs ?? 0;
+  const tl = Math.max(0, (ROTATE_KT - gs0) / ACCEL_KT_S);
+  const rollT = Math.min(t, tl);
+  // distance: rolling (accelerating) part + climb-out part, in kt·s
+  const distKtS = gs0 * rollT + 0.5 * ACCEL_KT_S * rollT * rollT + Math.max(0, t - tl) * CLIMB_KT;
+  const p = predictGeo({ lat: geo.lat, lon: geo.lon, altM: geo.altM, gsKt: 1, trackDeg: ac.track!, vRateFpm: 0 }, distKtS);
+  const airborne = t > tl;
+  const altFt = geo.altM / FT_TO_M + (airborne ? (CLIMB_FPM * (t - tl)) / 60 : 0);
+  return {
+    ...ac, lat: p.lat, lon: p.lon, altGeom: altFt, altBaro: altFt, onGround: !airborne,
+    gs: airborne ? CLIMB_KT : gs0 + ACCEL_KT_S * rollT, baroRate: airborne ? CLIMB_FPM : 0,
+    ts: now + t * 1000, seen: 0, seenPos: 0,
+  };
+}
+
 /** The aircraft as it will be `t` s from now (dead-reckoned, fresh timestamps). */
 function project(ac: Aircraft, now: number, t: number): Aircraft | null {
-  const geo = aircraftGeoPoint(ac);
+  const geo = aircraftGeoPoint(ac) ?? (ac.lat != null && ac.lon != null ? { lat: ac.lat, lon: ac.lon, altM: 0 } : null);
   if (!geo) return null;
   if (t === 0) return ac;
+  if (ac.onGround && ac.track != null && (ac.gs ?? 0) >= ROLL_MIN_KT) return projectRoll(ac, geo, now, t);
   if (ac.onGround || ac.gs == null || ac.track == null) return null;
   const p = predictGeo(
     { lat: geo.lat, lon: geo.lon, altM: geo.altM, gsKt: ac.gs, trackDeg: ac.track, vRateFpm: ac.baroRate },
