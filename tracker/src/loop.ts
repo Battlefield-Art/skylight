@@ -572,9 +572,10 @@ export class ControlLoop {
           t: now,
           v: nextPlane(
             this.upstream.getAircraft(), cfg.site, now, cfg.target, cfg.limits.horizon,
-            this.current?.hex ?? null,
+            this.current,
             cfg.target.departurePriority === false ? null : (this.upstream.getConfig().airport ?? SFO_ARP),
             this.sunAt(cfg.site, now),
+            cfg.targetMode,
           ),
         };
       } catch {
