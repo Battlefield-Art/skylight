@@ -46,7 +46,7 @@ fi
 case "$ENCODER" in
   h264_v4l2m2m) VOPTS=(-c:v h264_v4l2m2m -b:v "$VBITRATE") ;;
   *)            VOPTS=(-c:v libx264 -preset superfast -tune zerolatency \
-                       -b:v "$VBITRATE" -maxrate "$VBITRATE" -bufsize 2M \
+                       -b:v "$VBITRATE" -maxrate "$VBITRATE" -bufsize "${VBUFSIZE:-6M}" \
                        -pix_fmt yuv420p) ;;
 esac
 

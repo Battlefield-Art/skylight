@@ -258,6 +258,11 @@ def render(src: str, dst: str, shifts: dict[int, tuple[float, float]], vig_coeff
     ost.codec_context.time_base = ist.time_base
     ost.codec_context.thread_count = threads
     ost.options = {"crf": str(crf), "preset": preset, "profile": "high", "tune": "film"}
+    # The camera's codes are FULL range (the Pi tags clips as such since
+    # 2026-10-12; older clips are untagged but full range too): carry the
+    # codes through untouched and tag the output to match.
+    ost.options["x264-params"] = "fullrange=on:colorprim=bt709:transfer=bt709:colormatrix=bt709"
+    ost.codec_context.color_range = 2  # AVCOL_RANGE_JPEG (full)
     W, H = ost.width, ost.height
     Vy = vignette_map(vig_coeffs, W, H)
     Vc = cv2.resize(Vy, (W // 2, H // 2), interpolation=cv2.INTER_AREA)
@@ -282,7 +287,10 @@ def render(src: str, dst: str, shifts: dict[int, tuple[float, float]], vig_coeff
             nf = av.VideoFrame.from_ndarray(out, format="yuv420p")
             shifted += 1
         else:
-            nf = fr if fr.format.name == "yuv420p" else fr.reformat(format="yuv420p")
+            # Same raw codes as the shifted path (yuvj420p = full-range 4:2:0:
+            # reformatting it would rescale to TV range and flicker vs shifted
+            # frames).
+            nf = fr if fr.format.name in ("yuv420p", "yuvj420p") else fr.reformat(format="yuv420p")
             nf = av.VideoFrame.from_ndarray(nf.to_ndarray(), format="yuv420p")
         nf.pts = fr.pts
         nf.time_base = ist.time_base
