@@ -10,7 +10,7 @@ import type { PassQuality } from "./quality.js";
 export const SERIES_HZ = 10;
 export const SERIES_COLS = [
   "t", "pan", "tilt", "cPan", "cTilt", "zoom", "hfov", "pAz", "pEl", "slant",
-  "dcx", "dcy", "dage", "corrAz", "corrEl", "lead", "fe", "fpos",
+  "dcx", "dcy", "dage", "corrAz", "corrEl", "lead", "fe", "fpos", "zw",
 ] as const;
 /** A detection older than this is not a lock (contract: "< 1.5 s old"). */
 export const LOCK_MAX_AGE_MS = 1500;
@@ -49,6 +49,8 @@ export interface Sample {
   fe?: number | null;
   /** Lens focus position, raw units. */
   fpos?: number | null;
+  /** Zoom rule that set the zoom this sample (diagnostic string). */
+  zw?: string | null;
   gsKt?: number | null;
   altFt?: number | null;
   baroRateFpm?: number | null;

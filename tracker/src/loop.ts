@@ -325,6 +325,8 @@ export class ControlLoop {
   private acqHoldAt = 0;
   /** Last tick the lens was away from the commanded zoom (still travelling). */
   private lensMovingAt = 0;
+  /** Which rule set the zoom on the last tick (diagnostics). */
+  zoomWhy = "";
   /** Targets dropped for a challenger, hex → until (see selectTarget). */
   private targetCooldown = new Map<string, number>();
   /** Bias-innovation gate: consecutive frames whose measured bias disagrees
@@ -1195,6 +1197,9 @@ export class ControlLoop {
         this.lastDetection != null &&
         now - this.lastDetection.t < 1200 &&
         this.lockMotionOk;
+      // Which rule set the zoom this tick (logged per pass row as `zw`, to
+      // find what drives in→out pumping).
+      this.zoomWhy = lockFresh ? "frameLocked" : "frameOpen";
       const zoom = chooseZoom(
         targetAc, prediction.azEl, cfg, rateDps, this.lagDegLP,
         lockFresh ? cfg.zoom.lockedSigmaDeg : undefined,
@@ -1203,6 +1208,7 @@ export class ControlLoop {
         // Wide through the crossing so the fly-through stays framed.
         zoom.hfovDeg = ZENITH_MIN_HFOV;
         zoom.zoomUnits = zoomUnitsFromHfov(ZENITH_MIN_HFOV, cfg.zoom.fovLut);
+        this.zoomWhy = "zenith";
       }
       if (cfg.vision.lockWide) {
         // Vision-gated zoom LADDER: start fully wide; each time the detector
@@ -1310,6 +1316,7 @@ export class ControlLoop {
         if (ladderHfov > zoom.hfovDeg) {
           zoom.hfovDeg = ladderHfov;
           zoom.zoomUnits = zoomUnitsFromHfov(ladderHfov, cfg.zoom.fovLut);
+          this.zoomWhy = `ladder${this.ladderIdx}`;
         } else {
           // Ladder has reached the ADS-B framing — clamp the rung so a later
           // demotion starts from here, not from rungs banked beyond it.
@@ -1351,6 +1358,7 @@ export class ControlLoop {
         if (zoom.hfovDeg < floorHfov) {
           zoom.hfovDeg = floorHfov;
           zoom.zoomUnits = zoomUnitsFromHfov(floorHfov, cfg.zoom.fovLut);
+          this.zoomWhy = next > 0 && floorHfov === next ? "gearFloor" : "rateFloor";
         }
       }
       // Zoom DEBOUNCE: a zoom command is a motor move and a vision reset, so
@@ -1383,6 +1391,7 @@ export class ControlLoop {
         } else if (cur != null) {
           zoom.hfovDeg = cur;
           zoom.zoomUnits = zoomUnitsFromHfov(cur, cfg.zoom.fovLut);
+          this.zoomWhy += "+held";
         }
       }
       // Zoom STOPS (tracker.zoom.stopUnits / stopRatio): the lens re-focuses
@@ -1868,6 +1877,7 @@ export class ControlLoop {
         leadSec: prediction?.leadSec ?? 0,
         hfovDeg,
         angularSizeDeg,
+        zoomWhy: this.current ? this.zoomWhy : undefined,
       },
       candidates,
       calibration: this.calibration.state(cfg.site, now),
