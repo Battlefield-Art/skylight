@@ -422,7 +422,7 @@ export function seriesRows(series: SeriesJson | null | undefined): Row[] {
   const ix = (k: string) => series.cols.indexOf(k);
   const it = ix("t"), ih = ix("hfov"), is = ix("slant"), ix_ = ix("dcx"), iy = ix("dcy"), ia = ix("dage");
   if (it < 0) return [];
-  const g = (r: (number | null)[], i: number) => (i >= 0 && typeof r[i] === "number" && Number.isFinite(r[i]) ? (r[i] as number) : null);
+  const g = (r: (number | string | null)[], i: number) => (i >= 0 && typeof r[i] === "number" && Number.isFinite(r[i]) ? (r[i] as number) : null);
   return series.rows
     .map((r) => ({ t: g(r, it) ?? NaN, hfov: g(r, ih), slant: g(r, is), dcx: g(r, ix_), dcy: g(r, iy), dage: g(r, ia) }))
     .filter((r) => Number.isFinite(r.t));

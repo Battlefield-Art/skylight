@@ -190,7 +190,7 @@ export interface SeriesJson {
   t0: number;
   hz: number;
   cols: string[];
-  rows: (number | null)[][];
+  rows: (number | string | null)[][];
 }
 
 export interface PassInput {
@@ -276,6 +276,7 @@ export function buildSeries(t0: number, samples: Sample[]): SeriesJson {
       r2(s.t), r2(s.pan), r2(s.tilt), r2(s.cPan), r2(s.cTilt), rInt(s.zoom), r2(s.hfov),
       r2(s.pAz), r2(s.pEl), rInt(s.slant), r3(s.dcx), r3(s.dcy), rInt(s.dage),
       r3(s.corrAz), r3(s.corrEl), r2(s.lead), s.fe == null ? null : r2(s.fe), s.fpos ?? null,
+      s.zw ?? null,
     ]),
   };
 }
