@@ -1458,8 +1458,8 @@ export class ControlLoop {
           const trusted = lensZoom >= ZOOM_FOCUS_MIN_UNITS
             ? this.focus.trusted(lensZoom, distanceBand(prediction?.azEl.slantM ?? null), ZOOM_FOCUS_MIN_SAMPLES)
             : null;
-          if (d.setFocusDirect && trusted != null && Math.abs(trusted - a.target) < 5) d.setFocusDirect(a.target);
-          else d.focusNudge?.(a.deltaUnits);
+          const direct = d.setFocusDirect && trusted != null && Math.abs(trusted - a.target) < 5 && d.setFocusDirect(a.target);
+          if (!direct) d.focusNudge?.(a.deltaUnits);
         }
         else if (a.kind === "onePush" && cfg.vision.autofocusOnZoom) d.onePushAutofocus();
         if (a.kind === "nudge" || a.kind === "onePush") {
