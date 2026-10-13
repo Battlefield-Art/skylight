@@ -164,6 +164,8 @@ const LADDER_LOST_MS = 6000;
 /** After the lens reaches a new zoom, give the detector this long to re-find
  *  the plane before lost/bad time counts toward a demotion. */
 const ZOOM_ARRIVE_GRACE_MS = 1500;
+/** Vision resumes this long after the video has caught up with a zoom move. */
+const VISION_ZOOM_SETTLE_MS = 300;
 /** Learn the vision bias only while the aim moves slower than this, deg/s. */
 const BIAS_MAX_AIM_RATE_DPS = 3;
 /** Zoom-Focus Direct only at/above this zoom (the tele stops)... */
@@ -325,6 +327,8 @@ export class ControlLoop {
   private acqHoldAt = 0;
   /** Last tick the lens was away from the commanded zoom (still travelling). */
   private lensMovingAt = 0;
+  /** Last vision tick that saw the lens away from the commanded zoom. */
+  private zoomTransitAt = 0;
   /** Targets dropped for a challenger, hex → until (see selectTarget). */
   private targetCooldown = new Map<string, number>();
   /** Bias-innovation gate: consecutive frames whose measured bias disagrees
@@ -1989,6 +1993,24 @@ export class ControlLoop {
     const pose = this.driver().getPose();
     if (!frame || !pose || !this.video.status().running) return;
 
+    // Zoom in transit: frames straddle two scales (the motion diff is
+    // garbage) and are converted to the world with a zoom reading that runs
+    // ~encodeLag AHEAD of the picture, so the lock fails its motion check and
+    // a centred plane is "lost" right after every zoom-in (2026-10-13: most
+    // in→out reversals had the plane centred, then no detection for 3 s).
+    // Pause vision until the lens has settled and the video has caught up;
+    // the lock and its tracks just carry over (nothing expires meanwhile).
+    {
+      const now0 = Date.now();
+      const cmdZoom = this.lastCommanded?.zoomUnits;
+      if (cmdZoom != null && Math.abs(pose.zoomUnits - cmdZoom) > 15) this.zoomTransitAt = now0;
+      if (now0 - this.zoomTransitAt < cfg.vision.encodeLagMs + VISION_ZOOM_SETTLE_MS) {
+        this.prevLuma = null;
+        this.prevAim = null;
+        return;
+      }
+    }
+
     const hfov = hfovFromZoomUnits(pose.zoomUnits, cfg.zoom.fovLut);
     const vfov = hfov * (9 / 16);
     const aim = worldFromMount(pose, cfg.mount);
@@ -2393,7 +2415,9 @@ export class ControlLoop {
           this.visionGoodSince = 0;
           if (!this.visionBadSince) this.visionBadSince = now;
         }
-        if (this.lastDetection && now - this.lastDetection.t > 3000) {
+        // (the 3-s "gone" clock starts when vision resumed after a zoom move)
+        const visionBack = this.zoomTransitAt + cfg.vision.encodeLagMs + VISION_ZOOM_SETTLE_MS;
+        if (this.lastDetection && now - Math.max(this.lastDetection.t, visionBack) > 3000) {
           this.lastDetection = null;
         }
       }
