@@ -1190,22 +1190,11 @@ export class ControlLoop {
       // zoom command flapped between rungs at ~5 Hz (observed), pumping the
       // zoom motor through every pass.
       this.lagDegLP += 0.3 * (lagDeg - this.lagDegLP);
-      // Lens settling: track it before choosing the zoom (see the ladder).
-      const lensNow = d.getPose()?.zoomUnits;
-      const lensCmd = this.lastCommanded?.zoomUnits;
-      if (lensNow == null || lensCmd == null || Math.abs(lensNow - lensCmd) > 15) this.lensMovingAt = now;
-      const settledFrom = this.lensMovingAt + ZOOM_ARRIVE_GRACE_MS;
-      const lensSettled = now >= settledFrom;
-      // A zoom move itself blinds the detector for ~1 s; if the lock was good
-      // going into it, keep framing on the locked sigma until the lens has
-      // settled — otherwise the open-loop sigma asked for a much wider view
-      // and the debounce zoomed straight back out (in→out pumping).
       const lockFresh =
         cfg.vision.applyCorrection &&
         this.lastDetection != null &&
-        (now - this.lastDetection.t < 1200 ||
-          (!lensSettled && now - this.lastDetection.t < 1200 + (now - this.lensMovingAt) + ZOOM_ARRIVE_GRACE_MS)) &&
-        (this.lockMotionOk || !lensSettled); // the motion check is garbage mid-zoom too
+        now - this.lastDetection.t < 1200 &&
+        this.lockMotionOk;
       const zoom = chooseZoom(
         targetAc, prediction.azEl, cfg, rateDps, this.lagDegLP,
         lockFresh ? cfg.zoom.lockedSigmaDeg : undefined,
@@ -1241,6 +1230,11 @@ export class ControlLoop {
         // zoom in→out 1.6× per pass (2026-10-13: 31 reversals in 19 passes,
         // ~60% with no fresh detection in between). Count lost/bad time only
         // from when the lens has settled.
+        const lensNow = d.getPose()?.zoomUnits;
+        const lensCmd = this.lastCommanded?.zoomUnits;
+        if (lensNow == null || lensCmd == null || Math.abs(lensNow - lensCmd) > 15) this.lensMovingAt = now;
+        const settledFrom = this.lensMovingAt + ZOOM_ARRIVE_GRACE_MS;
+        const lensSettled = now >= settledFrom;
         if (!detFresh && this.lastDetection == null) {
           const since = this.current?.sinceMs ?? now;
           const seen = this.lastDetSeenAt >= since;
