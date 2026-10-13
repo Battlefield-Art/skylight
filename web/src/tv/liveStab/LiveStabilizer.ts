@@ -166,9 +166,11 @@ void main(){
   else c = c / vn(qc) * vn(ul);
   if (dbAmp > 0.) {
     // static triangular dither in dbCell px cells: the same pattern every
-    // frame, so the stream encoder keeps it (per-frame grain gets discarded)
+    // frame, so the stream encoder keeps it (per-frame grain gets discarded).
+    // Grey (equal in R, G, B) = luma-only, like the archive: independent
+    // per-channel noise would put a third of it into chroma.
     ivec2 k = ivec2(gl_FragCoord.xy / dbCell);
-    vec3 n = texelFetch(nz, k & 255, 0).rgb + texelFetch(nz, (k + ivec2(97, 61)) & 255, 0).rgb - 1.;
+    float n = texelFetch(nz, k & 255, 0).r + texelFetch(nz, (k + ivec2(97, 61)) & 255, 0).r - 1.;
     c += n * dbAmp / 255.;
   }
   o = vec4(c, 1.);

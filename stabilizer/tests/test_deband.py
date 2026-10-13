@@ -1,6 +1,12 @@
+"""python3 -m pytest stabilizer/tests  (pure numpy + OpenCV; no video needed)"""
+import os
+import sys
+
 import numpy as np
 
-from skylight_stab.deband import Debander, FlatField
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from skylight_stab.deband import Debander, FlatField  # noqa: E402
 
 
 def staircase(w=640, h=360):
