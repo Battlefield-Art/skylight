@@ -175,8 +175,13 @@ const TARGET_COOLDOWN_MS = 45_000;
 /** Rung cadence: normal, and when the lock is dead-centred and established
  *  (after the zenith flip the plane is close and big — framing it within a
  *  couple of seconds matters more than caution). */
-const LADDER_MS = 1000;
-const LADDER_FAST_MS = 500;
+// Slower than before (1000/500 ms, two rungs at once): with a working lens the
+// ladder zoomed in faster than the lock could follow — 2.3 in→out reversals
+// per pass (2026-10-13 15:21-16:05, 20 passes), nearly all with the lock
+// stale before the zoom-out (zw: frameOpen 14, ladder 22). One rung at a
+// time, and the fast pace only for a long, dead-centred lock.
+const LADDER_MS = 1500;
+const LADDER_FAST_MS = 1000;
 /** Catch-up braking horizon, s: a reactive rate above |err|/this would
  *  overshoot once command latency and the motor's stop are counted. */
 const BRAKE_SEC = 0.6; // measured pan command→motion latency ≈0.5-0.8 s
@@ -1288,13 +1293,13 @@ export class ControlLoop {
           // (soft at 20×: the plane was a defocused disc).
           wideHfov * Math.pow(RUNG, this.ladderIdx) > zoom.hfovDeg * 1.05 &&
           now - this.lastLadderAt >
-            (this.lastResidFrac < 0.2 && this.lockHits >= 8 ? LADDER_FAST_MS : LADDER_MS)
+            (this.lastResidFrac < 0.15 && this.lockHits >= 15 ? LADDER_FAST_MS : LADDER_MS)
         ) {
           // A dead-centred, well-established lock takes two rungs at once:
           // after an overhead crossing the ladder restarts from wide while
           // the plane is close and big, and one rung per second left it
           // small for the best ten seconds of the leg (observed).
-          const rungs = this.lastResidFrac < 0.12 && this.lockHits >= 12 ? 2 : 1;
+          const rungs = 1;
           this.ladderIdx += rungs;
           this.lastLadderAt = now;
           this.visionGoodSince = 0; // earn the next rung from scratch
