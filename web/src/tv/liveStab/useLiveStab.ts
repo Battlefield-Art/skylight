@@ -14,6 +14,7 @@ export function liveStabOpts(c: TrackerConfig["liveStab"]): LiveStabOpts {
     maxCropZoom: c.maxCropZoom,
     edge: c.edge,
     fillMinElDeg: c.fillMinElDeg,
+    deband: { ...c.deband },
   };
 }
 
@@ -24,6 +25,9 @@ export interface LiveStabHandle {
   lagMsRef: MutableRefObject<number>;
   /** Latest displayed-frame info. */
   infoRef: MutableRefObject<StabFrameInfo | null>;
+  /** Picture roll to cancel for the displayed (delayed) frame, deg (null = none).
+   *  The shader draws the leveling (so the static dither stays on screen pixels). */
+  setLevel: (rollDeg: number | null) => void;
 }
 
 export function useLiveStab(
@@ -43,6 +47,7 @@ export function useLiveStab(
   const lagMsRef = useRef(0);
   const infoRef = useRef<StabFrameInfo | null>(null);
   const stabRef = useRef<LiveStabilizer | null>(null);
+  const levelRef = useRef<number | null>(null);
   const onFrameRef = useRef(args.onFrame);
   onFrameRef.current = args.onFrame;
   const opts = liveStabOpts(args.cfg);
@@ -64,6 +69,7 @@ export function useLiveStab(
     }
     stabRef.current = s;
     s.setContext(args.ctx);
+    s.setLevel(levelRef.current);
     let shown = false;
     let lag: number | null = null;
     s.onFrame = (info) => {
@@ -98,7 +104,11 @@ export function useLiveStab(
     stabRef.current?.setOpts(JSON.parse(optsKey) as LiveStabOpts);
   }, [optsKey]);
 
-  return { running, lagMsRef, infoRef };
+  const setLevel = (rollDeg: number | null) => {
+    levelRef.current = rollDeg;
+    stabRef.current?.setLevel(rollDeg);
+  };
+  return { running, lagMsRef, infoRef, setLevel };
 }
 
 /**
