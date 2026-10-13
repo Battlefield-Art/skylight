@@ -75,7 +75,8 @@ export function useLiveStab(
     s.onFrame = (info) => {
       // smooth the measured lag (fragment arrival jitter) — overlays replay
       // by it, and a jittery delay would make them stutter
-      lag = lag == null ? info.lagMs : lag + (info.lagMs - lag) * 0.02;
+      // (snap on a real change — a restarted relay — instead of easing for ~10 s)
+      lag = lag == null || Math.abs(info.lagMs - lag) > 1500 ? info.lagMs : lag + (info.lagMs - lag) * 0.02;
       lagMsRef.current = lag;
       infoRef.current = info;
       if (!shown) { shown = true; setRunning(true); }

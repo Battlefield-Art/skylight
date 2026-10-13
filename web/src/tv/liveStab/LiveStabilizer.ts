@@ -174,6 +174,9 @@ void main(){
   o = vec4(c, 1.);
 }`;
 
+/** Most the display may trail live beyond the look-ahead (MSE cushion etc.). */
+const MAX_EXTRA_LAG_MS = 6000;
+
 export class LiveStabilizer {
   onFrame: ((info: StabFrameInfo) => void) | null = null;
   onFail: ((why: string) => void) | null = null;
@@ -484,7 +487,15 @@ export class LiveStabilizer {
     }
     const t0 = performance.now();
     const t = meta.mediaTime;
-    if (this.lastT >= 0 && (t < this.lastT - 0.005 || t - this.lastT > 1)) { this.seg++; this.follow.reset(); }
+    if (this.lastT >= 0 && (t < this.lastT - 0.005 || t - this.lastT > 1)) {
+      this.seg++;
+      this.follow.reset();
+      // A new media timeline (the MSE relay restarted — e.g. a tracker
+      // restart): the old wall−media offset no longer applies. Keeping it
+      // (min() only creeps up 1.5 ms/s) made overlays replay state from
+      // minutes ago — "SCANNING" while a plane was tracked (2026-10-13).
+      this.liveOff = null;
+    }
     if (Math.abs(t - this.lastT) < 1e-4) return; // same frame re-presented
     this.lastT = t;
 
@@ -602,7 +613,10 @@ export class LiveStabilizer {
       ffOn: [sel ? 1 : 0], keep: [on ? Math.min(1, Math.max(0, db.vignetteKeep)) : 1],
       lvRot: [(lv.rotateDeg * Math.PI) / 180], lvScale: [lv.scale],
     });
-    const lagMs = drec && this.liveOff != null ? performance.now() - (drec.t * 1000 + this.liveOff) : this.opts.delaySec * 1000;
+    const rawLag = drec && this.liveOff != null ? performance.now() - (drec.t * 1000 + this.liveOff) : this.opts.delaySec * 1000;
+    // Safety net: the display can't plausibly trail live by more than the
+    // look-ahead plus a generous MSE cushion.
+    const lagMs = Math.max(0, Math.min(rawLag, this.opts.delaySec * 1000 + MAX_EXTRA_LAG_MS));
     const info: StabFrameInfo = { cx: plan.cx, cy: plan.cy, zoom: plan.zoom, gain: plan.gain, plane: plan.plane, lagMs };
     this.stat(tDet, performance.now() - t1);
     this.rows.push([ds, drec?.t ?? 0, plan.plane?.x ?? NaN, plan.plane?.y ?? NaN, plan.cx, plan.cy, plan.zoom, plan.gain, lagMs, drec?.wantCrop ? 1 : 0, this.lastEdgeTex]);

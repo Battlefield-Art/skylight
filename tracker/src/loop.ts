@@ -161,6 +161,9 @@ const ACQ_WIDER_MS = 8000;
 const ACQ_WIDE_MS = 16_000;
 const ACQ_CYCLE_MS = 24_000;
 const LADDER_LOST_MS = 6000;
+/** After the lens reaches a new zoom, give the detector this long to re-find
+ *  the plane before lost/bad time counts toward a demotion. */
+const ZOOM_ARRIVE_GRACE_MS = 1500;
 /** Learn the vision bias only while the aim moves slower than this, deg/s. */
 const BIAS_MAX_AIM_RATE_DPS = 3;
 /** Zoom-Focus Direct only at/above this zoom (the tele stops)... */
@@ -320,6 +323,10 @@ export class ControlLoop {
    *  overhead park/hand-over) — acquisition time only counts while the plane
    *  can actually be seen. */
   private acqHoldAt = 0;
+  /** Last tick the lens was away from the commanded zoom (still travelling). */
+  private lensMovingAt = 0;
+  /** Which rule set the zoom on the last tick (diagnostics). */
+  zoomWhy = "";
   /** Targets dropped for a challenger, hex → until (see selectTarget). */
   private targetCooldown = new Map<string, number>();
   /** Bias-innovation gate: consecutive frames whose measured bias disagrees
@@ -1190,6 +1197,9 @@ export class ControlLoop {
         this.lastDetection != null &&
         now - this.lastDetection.t < 1200 &&
         this.lockMotionOk;
+      // Which rule set the zoom this tick (logged per pass row as `zw`, to
+      // find what drives in→out pumping).
+      this.zoomWhy = lockFresh ? "frameLocked" : "frameOpen";
       const zoom = chooseZoom(
         targetAc, prediction.azEl, cfg, rateDps, this.lagDegLP,
         lockFresh ? cfg.zoom.lockedSigmaDeg : undefined,
@@ -1198,6 +1208,7 @@ export class ControlLoop {
         // Wide through the crossing so the fly-through stays framed.
         zoom.hfovDeg = ZENITH_MIN_HFOV;
         zoom.zoomUnits = zoomUnitsFromHfov(ZENITH_MIN_HFOV, cfg.zoom.fovLut);
+        this.zoomWhy = "zenith";
       }
       if (cfg.vision.lockWide) {
         // Vision-gated zoom LADDER: start fully wide; each time the detector
@@ -1219,6 +1230,17 @@ export class ControlLoop {
         const visible =
           prediction.azEl.elDeg >= horizonMinEl(cfg.limits.horizon, prediction.azEl.azDeg, -90);
         if (!visible || hold) this.acqHoldAt = now;
+        // Lens travelling (or just arrived): consecutive frames are at
+        // different scales, so the motion detector sees garbage and the lock
+        // drops for ~1 s after EVERY zoom move. Demoting on that pumped the
+        // zoom in→out 1.6× per pass (2026-10-13: 31 reversals in 19 passes,
+        // ~60% with no fresh detection in between). Count lost/bad time only
+        // from when the lens has settled.
+        const lensNow = d.getPose()?.zoomUnits;
+        const lensCmd = this.lastCommanded?.zoomUnits;
+        if (lensNow == null || lensCmd == null || Math.abs(lensNow - lensCmd) > 15) this.lensMovingAt = now;
+        const settledFrom = this.lensMovingAt + ZOOM_ARRIVE_GRACE_MS;
+        const lensSettled = now >= settledFrom;
         if (!detFresh && this.lastDetection == null) {
           const since = this.current?.sinceMs ?? now;
           const seen = this.lastDetSeenAt >= since;
@@ -1226,7 +1248,7 @@ export class ControlLoop {
             // Just lost: step OUT one rung at a time first — a plane that
             // went soft or dim is usually still in frame, and ×1.6 wider
             // usually re-finds it in a second.
-            if (this.ladderIdx > 0 && now - this.lastLadderAt > LADDER_DEMOTE_AFTER_MS) {
+            if (lensSettled && this.ladderIdx > 0 && now - Math.max(this.lastLadderAt, settledFrom) > LADDER_DEMOTE_AFTER_MS) {
               this.ladderIdx--;
               this.lastLadderAt = now;
             }
@@ -1279,7 +1301,8 @@ export class ControlLoop {
         } else if (
           this.ladderIdx > 0 &&
           this.visionBadSince > 0 &&
-          now - this.visionBadSince > LADDER_DEMOTE_AFTER_MS &&
+          lensSettled &&
+          now - Math.max(this.visionBadSince, settledFrom) > LADDER_DEMOTE_AFTER_MS &&
           now - this.lastLadderAt > 2000
         ) {
           // Lock degraded for a sustained stretch (not one noisy frame — a
@@ -1293,6 +1316,7 @@ export class ControlLoop {
         if (ladderHfov > zoom.hfovDeg) {
           zoom.hfovDeg = ladderHfov;
           zoom.zoomUnits = zoomUnitsFromHfov(ladderHfov, cfg.zoom.fovLut);
+          this.zoomWhy = `ladder${this.ladderIdx}`;
         } else {
           // Ladder has reached the ADS-B framing — clamp the rung so a later
           // demotion starts from here, not from rungs banked beyond it.
@@ -1334,6 +1358,7 @@ export class ControlLoop {
         if (zoom.hfovDeg < floorHfov) {
           zoom.hfovDeg = floorHfov;
           zoom.zoomUnits = zoomUnitsFromHfov(floorHfov, cfg.zoom.fovLut);
+          this.zoomWhy = next > 0 && floorHfov === next ? "gearFloor" : "rateFloor";
         }
       }
       // Zoom DEBOUNCE: a zoom command is a motor move and a vision reset, so
@@ -1366,6 +1391,7 @@ export class ControlLoop {
         } else if (cur != null) {
           zoom.hfovDeg = cur;
           zoom.zoomUnits = zoomUnitsFromHfov(cur, cfg.zoom.fovLut);
+          this.zoomWhy += "+held";
         }
       }
       // Zoom STOPS (tracker.zoom.stopUnits / stopRatio): the lens re-focuses
@@ -1851,6 +1877,7 @@ export class ControlLoop {
         leadSec: prediction?.leadSec ?? 0,
         hfovDeg,
         angularSizeDeg,
+        zoomWhy: this.current ? this.zoomWhy : undefined,
       },
       candidates,
       calibration: this.calibration.state(cfg.site, now),
