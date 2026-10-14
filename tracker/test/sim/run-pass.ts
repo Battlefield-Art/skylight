@@ -43,6 +43,8 @@ export interface PassMetrics {
   inFrame: number;
   /** p95 of error ÷ HFOV (frame widths). */
   errFrameP95: number;
+  /** Loop events of interest (zenith park/follow/release), with sim time. */
+  events: string[];
 }
 
 export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
@@ -102,6 +104,10 @@ export async function runPass(
   const loop = new ControlLoop(
     upstream as never, () => sim.driver, recorder as never, video as never, () => {},
   );
+  const events: string[] = [];
+  loop.onEvent((e) => {
+    if (e.kind === "zenith") events.push(`${((e.t - t0) / 1000).toFixed(1)}s ${e.kind}:${(e as { phase?: string }).phase}`);
+  });
   fix = makeFix();
   loop.onSnapshot(Date.now(), [fix]);
   loop.manualTarget("sim001");
@@ -142,6 +148,7 @@ export async function runPass(
     errMax: Math.max(...errs),
     inFrame: errs.length ? inFrame / errs.length : 0,
     errFrameP95: q(frac, 0.95),
+    events,
   };
 }
 

@@ -188,18 +188,6 @@ const TARGET_COOLDOWN_MS = 45_000;
 // time, and the fast pace only for a long, dead-centred lock.
 const LADDER_MS = 1500;
 const LADDER_FAST_MS = 1000;
-/** Catch-up braking horizon, s: a reactive rate above |err|/this would
- *  overshoot once command latency and the motor's stop are counted. */
-const BRAKE_SEC = 0.6; // measured pan command→motion latency ≈0.5-0.8 s
-/** Pan rate cap while handing over from the overhead park, deg/s — and the
- *  looser cap used while the head is still far from the plane. */
-const FOLLOW_PAN_MAX_DPS = 25;
-const FOLLOW_CATCHUP_ERR_DEG = 20;
-const FOLLOW_CATCHUP_MAX_DPS = 45;
-/** Azimuth feedforward weight while in / just after a crossing. */
-const FF_SCALE_CROSSING = 0.4;
-/** Aim lead cap (beyond the fix age) during / just after a crossing, s. */
-const SHORT_LEAD_SEC = 0.4;
 /** Velocity-pursuit PI gains (exported for the pass archive's tuning snapshot). */
 export const PURSUIT_KP = 1.0; // 1/s — 1.3 rang at ~0.5 Hz on slow legs (measured tilt latency ~0.1 s)
 export const PURSUIT_KI = 0.6; // 1/s² — converges in ~2-3 s, anti-windup below
@@ -342,8 +330,6 @@ export class ControlLoop {
   private lastDetSeenAt = 0;
   /** This pass was classified as a zenith pass inbound (see zenithHold). */
   private zenithLatched = false;
-  /** When the crossing regime was last released (short-lead window). */
-  private zenithExitAt = 0;
   /** Last tick the search clock was held (plane below the skyline, or the
    *  overhead park/hand-over) — acquisition time only counts while the plane
    *  can actually be seen. */
@@ -883,7 +869,6 @@ export class ControlLoop {
     this.wasHold = false;
     this.wrapHolding = false;
     this.zenithLatched = false;
-    this.zenithExitAt = 0;
     this.biasOutliers = 0;
     this.detHops = 0;
     this.lockMotionOk = false;
@@ -968,23 +953,20 @@ export class ControlLoop {
     }
 
     if (tracking && targetAc) {
-      // Near and just after an overhead crossing the azimuth rate is large
-      // and collapsing fast: a ~1 s lead then puts the goal 20-30° of pan
-      // ahead, and as the rate collapses the goal RETREATS onto a head that
-      // is still swinging toward it (observed: 29° overshoot, 7 s to
-      // re-lock). Keep the lead short there; vision centres the rest.
-      const shortLead = this.zenithLatched || now - this.zenithExitAt < 3000;
+      // (A short-lead/no-lead rule around overhead crossings, FF_SCALE_CROSSING
+      // and the follow-phase pan caps were removed 2026-10-14: patches over
+      // the world-frame feedforward bug; no effect in the loop twin since.)
       const curPT = poseEst ? { panDeg: poseEst.panDeg, tiltDeg: poseEst.tiltDeg } : null;
       // Setpoint lead per axis = actuator latency + the aim-only lead (the
       // latter is NOT in the cmdAt() error reference below, so it shifts
       // where the head ends up instead of cancelling out).
-      const aimLead = shortLead ? 0 : cfg.predict.aimLeadSec ?? 0;
+      const aimLead = cfg.predict.aimLeadSec ?? 0;
       const tiltLat = (cfg.predict.tiltLatencySec ?? 0.4) + aimLead;
       const panLat = (cfg.predict.panLatencySec ?? 0.6) + aimLead;
       const baseP = { ...cfg.predict, motorLatencySec: tiltLat };
       prediction = predictAim(
         targetAc, cfg.site, now, this.history,
-        shortLead ? { ...baseP, maxLeadSec: SHORT_LEAD_SEC } : baseP,
+        baseP,
         cfg.mount, cfg.limits, curPT,
       );
       // The pan axis answers ~0.6 s after a command (tilt ~0.15 s): its
@@ -994,7 +976,7 @@ export class ControlLoop {
       // ago, so the loop sees only true deviations.)
       const predAzLead = predictAim(
         targetAc, cfg.site, now, this.history,
-        shortLead ? { ...cfg.predict, motorLatencySec: panLat, maxLeadSec: SHORT_LEAD_SEC } : { ...cfg.predict, motorLatencySec: panLat },
+        { ...cfg.predict, motorLatencySec: panLat },
         cfg.mount, cfg.limits, curPT,
       );
       if (prediction && predAzLead) azLeadPred = predAzLead;
@@ -1013,7 +995,6 @@ export class ControlLoop {
       if (hold?.phase === "park") this.zenithLatched = true;
       else if (!hold && this.zenithLatched) {
         this.zenithLatched = false; // released: cone left
-        this.zenithExitAt = now;
         this.emit({ kind: "zenith", t: now, phase: "release" });
       }
 
@@ -1620,42 +1601,28 @@ export class ControlLoop {
         else this.panRateI *= 0.98;
         if (Math.abs(errTilt) < iGate) this.tiltRateI = clamp(this.tiltRateI + KI * errTilt * dtTick, -I_MAX, I_MAX);
         else this.tiltRateI *= 0.98;
-        // Around an overhead crossing the azimuth rate is large and collapsing
-        // within a second or two; full feedforward on it plus the ~0.6 s
-        // actuator lag overshoots 20-35° at hand-over (UAL626, ANA108). Lean
-        // on the position terms there — they are stable with the lag at
-        // KP 1 — and only partially on the feedforward.
-        const ffScale = this.zenithLatched || now - this.zenithExitAt < 3000 ? FF_SCALE_CROSSING : 1;
         // The setpoint's motion in HEAD axes: on the wedge the world az/el
         // rates are not the pan/tilt rates (UAL875 2026-10-14: −82°/s sent
         // where the head needed −24°/s; it swung 46° past the plane).
         // The vision correction's glide is in world az/el: map it through
         // the lean too (the trackers are already in head axes).
         const corrFf = mountRatesFromWorld(az, el, corrAzRateDps, corrElRateDps, cfg.mount);
-        const ffPan = (ffScale * this.azTracker.rate) / cfg.mount.panGain + corrFf.panDps;
+        const ffPan = this.azTracker.rate / cfg.mount.panGain + corrFf.panDps;
         const ffTilt = this.elTracker.rate / cfg.mount.tiltGain + corrFf.tiltDps;
         let panRate = ffPan + KP * this.errPanLP + this.panRateI;
         let tiltRate = ffTilt + KP * this.errTiltLP + this.tiltRateI;
         // Latency-aware braking on the CATCH-UP part of the command: a head
-        // closing a 10° gap at 60°/s still has ~0.3 s of command latency and
+        // closing a 10° gap at 60°/s still has its command latency to go and
         // no soft stop, so it sails 4-13° past the setpoint (observed on
         // every acquisition and zenith-hold exit). Bound the reactive rate
-        // by what can still be absorbed before arrival; the feedforward
-        // (the plane's own motion) is never limited.
-        const brakePan = Math.abs(ffPan) + Math.max(1.5, Math.abs(errPan) / BRAKE_SEC);
-        const brakeTilt = Math.abs(ffTilt) + Math.max(1.5, Math.abs(errTilt) / BRAKE_SEC);
+        // by what can still be absorbed within that axis's latency; the
+        // feedforward (the plane's own motion) is never limited.
+        const brakePanSec = Math.max(0.2, cfg.predict.panLatencySec ?? 0.6);
+        const brakeTiltSec = Math.max(0.2, cfg.predict.tiltLatencySec ?? 0.4);
+        const brakePan = Math.abs(ffPan) + Math.max(1.5, Math.abs(errPan) / brakePanSec);
+        const brakeTilt = Math.abs(ffTilt) + Math.max(1.5, Math.abs(errTilt) / brakeTiltSec);
         panRate = clamp(panRate, -brakePan, brakePan);
         tiltRate = clamp(tiltRate, -brakeTilt, brakeTilt);
-        // Coming out of an overhead crossing the azimuth rate is still high
-        // and collapsing: sweep, don't whip.
-        if (hold?.phase === "follow") {
-          // ...unless the head is still far from the plane (the park never
-          // finished before the crossing): then it is a catch-up, not a
-          // sweep, and the brake alone governs (DAL2159: a 100° catch-up
-          // crawled at 20°/s for 6 s under the sweep cap).
-          const cap = Math.abs(errPan) > FOLLOW_CATCHUP_ERR_DEG ? FOLLOW_CATCHUP_MAX_DPS : FOLLOW_PAN_MAX_DPS;
-          panRate = clamp(panRate, -cap, cap);
-        }
         // Deadband so the camera rests when locked on (frame-relative: what
         // counts as "centered" is a fraction of the field of view, not a
         // fixed angle). The driver dithers against stop below the table
