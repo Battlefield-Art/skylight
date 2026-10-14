@@ -75,9 +75,12 @@ import type { Upstream } from "./upstream.js";
 import type { VideoStream } from "./video/stream.js";
 
 const TRACKER_DIR = dirname(fileURLToPath(import.meta.url));
-const AUTOCAL_FILE = resolve(TRACKER_DIR, "../data/autocal.json");
-const LANDMARK_FILE = resolve(TRACKER_DIR, "../data/landmarks.json");
-const FOCUS_LUT_FILE = resolve(TRACKER_DIR, "../data/focus-lut.json");
+/** Learned stores (autocal, landmarks, focus); SKYLIGHT_TRACKER_DATA
+ *  redirects them (simulation runs must not touch the real ones). */
+const DATA_DIR = process.env.SKYLIGHT_TRACKER_DATA ?? resolve(TRACKER_DIR, "../data");
+const AUTOCAL_FILE = resolve(DATA_DIR, "autocal.json");
+const LANDMARK_FILE = resolve(DATA_DIR, "landmarks.json");
+const FOCUS_LUT_FILE = resolve(DATA_DIR, "focus-lut.json");
 /** Landmark check cadence: first one shortly after start (a remount is
  *  usually followed by a restart), then daily; retries after a failed or
  *  aborted check. */
