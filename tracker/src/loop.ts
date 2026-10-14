@@ -2346,9 +2346,16 @@ export class ControlLoop {
           if (residFrac < 0.35 && this.lockMotionOk) {
             if (!this.visionGoodSince) this.visionGoodSince = now;
             this.visionBadSince = 0;
-          } else if (residFrac > 0.6 || !this.lockMotionOk) {
+          } else if (residFrac > 0.6 || (!this.lockMotionOk && residFrac > 0.35)) {
+            // A failed motion check alone isn't "bad" while the plane sits
+            // centred: at tele a well-tracked plane barely moves in frame and
+            // its measured sky velocity is noisy. Counting it stepped the
+            // ladder out with the plane centred — 13 of 16 "locked" ladder
+            // demotions (2026-10-13, 40 passes; median residual 0.3).
             this.visionGoodSince = 0;
             if (!this.visionBadSince) this.visionBadSince = now;
+          } else if (residFrac <= 0.35) {
+            this.visionBadSince = 0; // centred but motion-unsure: neither good nor bad
           }
 
           // AUTO-CALIBRATION: a steady, well-established lock pairs the
