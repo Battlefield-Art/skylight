@@ -20,6 +20,7 @@ import {
   hfovFromZoomUnits,
   mountFrameFromWorld,
   mountFromWorld,
+  mountRatesFromWorld,
   norm180,
   SAME_FIX_MS,
   worldFromMount,
@@ -1361,7 +1362,10 @@ export class ControlLoop {
         // seconds, then caught up at 18°/s and overshot (SCX395). Hold the
         // view wider while the pan axis is that fast; hysteresis so the zoom
         // doesn't flap around the thresholds.
-        const panAxisRate = Math.abs(this.azTracker.rate);
+        // The HEAD's pan rate — on the wedge not the world azimuth rate.
+        const panAxisRate = Math.abs(
+          mountRatesFromWorld(az, el, this.azTracker.rate, this.elTracker.rate, cfg.mount).panDps * cfg.mount.panGain,
+        );
         const g = this.gearFloorHfov;
         const next =
           panAxisRate > 6 || (g >= 13.5 && panAxisRate > 5) ? 13.5
@@ -1606,8 +1610,14 @@ export class ControlLoop {
         // on the position terms there — they are stable with the lag at
         // KP 1 — and only partially on the feedforward.
         const ffScale = this.zenithLatched || now - this.zenithExitAt < 3000 ? FF_SCALE_CROSSING : 1;
-        const ffPan = (ffScale * this.azTracker.rate + corrAzRateDps) / cfg.mount.panGain;
-        const ffTilt = (this.elTracker.rate + corrElRateDps) / cfg.mount.tiltGain;
+        // The setpoint's motion in HEAD axes: on the wedge the world az/el
+        // rates are not the pan/tilt rates (UAL875 2026-10-14: −82°/s sent
+        // where the head needed −24°/s; it swung 46° past the plane).
+        const ff = mountRatesFromWorld(
+          az, el, ffScale * this.azTracker.rate + corrAzRateDps, this.elTracker.rate + corrElRateDps, cfg.mount,
+        );
+        const ffPan = ff.panDps;
+        const ffTilt = ff.tiltDps;
         let panRate = ffPan + KP * this.errPanLP + this.panRateI;
         let tiltRate = ffTilt + KP * this.errTiltLP + this.tiltRateI;
         // Latency-aware braking on the CATCH-UP part of the command: a head
