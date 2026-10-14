@@ -90,8 +90,9 @@ export class FakeViscaHead {
       // Absolute: 06 02 vv ww pppp tttt
       const pan = (nib(p.slice(6, 10)) - this.units.panZeroUnits) / this.units.panUnitsPerDeg;
       const tilt = (nib(p.slice(10, 14)) - this.units.tiltZeroUnits) / this.units.tiltUnitsPerDeg;
-      const panDps = this.rateAtWide("pan", p[4]);
-      const tiltDps = this.rateAtWide("tilt", p[5]);
+      // absolute moves run at the profile's measured absolute speed
+      const panDps = this.profile.absolute.panDps;
+      const tiltDps = this.profile.absolute.tiltDps;
       this.later(Math.min(this.opts.panLatencySec, this.opts.tiltLatencySec), () => {
         this.panRate = 0;
         this.tiltRate = 0;
@@ -102,13 +103,6 @@ export class FakeViscaHead {
       const z = nib(p.slice(4, 8));
       this.later(0.1, () => { this.zoomGoal = z; });
     }
-  }
-
-  private rateAtWide(axis: "pan" | "tilt", setting: number): number {
-    const t = this.profile.speedSurface[0][axis];
-    let best = t[0];
-    for (const e of t) if (Math.abs(e[0] - setting) < Math.abs(best[0] - setting)) best = e;
-    return best[1];
   }
 
   private inquiry(p: number[]): void {

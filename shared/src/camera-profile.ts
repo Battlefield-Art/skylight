@@ -29,6 +29,10 @@ export interface CameraProfile {
     tiltSetting: number;
     longPanSetting: number;
     longPanMoveDeg: number;
+    /** Measured speed of an absolute move at those settings, deg/s (it need
+     *  not match the drive table: plans and the park lead use this). */
+    panDps: number;
+    tiltDps: number;
   };
   lens: {
     /** Fastest zoom travel, lens units per second (bounds plausible readings). */
@@ -247,6 +251,12 @@ export const TONGVEO_PROFILE: CameraProfile = {
     tiltSetting: 0x14,
     longPanSetting: 0x12,
     longPanMoveDeg: 120,
+    // ABS pan measured ~33-60°/s whatever the byte (camera-speed-limits);
+    // the drive table's 75°/s for 0x18 made the park start too late
+    // (UAL8143 2026-10-14: parked 3.3 s ahead, head 19° off after). Tilt
+    // not measured separately.
+    panDps: 40,
+    tiltDps: 30,
   },
   // Zoom travel measured ~400-500 units/s in pass series (2026-10-14).
   lens: {

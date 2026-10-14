@@ -16,6 +16,11 @@ const EJM450: Flight = {
 // Straight through the wedge head's own pole (world el ≈ 63° toward az 218):
 // the geometric singularity of THIS mount — must be handled by the park.
 const POLE: Flight = { startEastM: 2609, startNorthM: -3030, altM: 1500, gsKt: 190, trackDeg: 308, durationSec: 80 };
+// UAL8143 (2026-10-14): 275 kt climbing out, closest 2.8 km at az 222 el 65
+// — next to the wedge head's pole; parked live and came out 19° off.
+const UAL8143: Flight = {
+  startEastM: -3648, startNorthM: 2233, altM: 2095, gsKt: 275, trackDeg: 138, climbFpm: 3000, durationSec: 55,
+};
 // A routine pass: 3 km up, 2 km to the side.
 const ROUTINE: Flight = { startEastM: 2000, startNorthM: -9000, altM: 3000, gsKt: 250, trackDeg: 0, durationSec: 70 };
 
@@ -23,11 +28,11 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("loop simulation", () => {
-  const cases = [["overhead", OVERHEAD], ["ejm450", EJM450], ["pole", POLE], ["routine", ROUTINE]] as const;
+  const cases = [["overhead", OVERHEAD], ["ejm450", EJM450], ["pole", POLE], ["ual8143", UAL8143], ["routine", ROUTINE]] as const;
   for (const [name, flight] of cases) {
     for (const lean of [27.35, 0]) {
       // On a level mount the "pole" flight crosses the pan blind spot instead.
-      if (name === "pole" && lean === 0) continue;
+      if ((name === "pole" || name === "ual8143") && lean === 0) continue;
       it(`${name} pass, mount lean ${lean}°`, async () => {
         const t = baseTracker();
         const m = await runPass({ ...t, mount: { ...t.mount, levelTiltDeg: lean } }, flight);

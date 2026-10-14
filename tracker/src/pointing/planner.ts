@@ -49,15 +49,11 @@ export interface ParkLimits {
 }
 
 export function parkLimits(profile: CameraProfile, reachFrac: number): ParkLimits {
-  const wide = profile.speedSurface[0].pan;
-  const top = Math.max(...wide.map((e) => e[1]));
-  // absolute moves run at the rate of their speed setting at wide
-  const abs = wide.reduce((b, e) =>
-    Math.abs(e[0] - profile.absolute.panSetting) < Math.abs(b[0] - profile.absolute.panSetting) ? e : b)[1];
+  const top = Math.max(...profile.speedSurface[0].pan.map((e) => e[1]));
   return {
     aboveDps: (reachFrac > 0 ? reachFrac : 1) * top,
     tiltDeg: profile.mechanical.parkTiltMaxDeg,
-    leadSec: 180 / Math.max(10, abs) + PARK_SETTLE_SEC,
+    leadSec: 180 / Math.max(10, profile.absolute.panDps) + PARK_SETTLE_SEC,
   };
 }
 /** While the target is above this elevation we are "in the crossing". */
