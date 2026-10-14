@@ -19,6 +19,7 @@ import {
   fixTimeMs,
   hfovFromZoomUnits,
   mountFrameFromWorld,
+  worldFromMountFrame,
   mountFromWorld,
   mountRatesFromWorld,
   norm180,
@@ -27,6 +28,7 @@ import {
   zoomUnitsFromHfov,
   type Aircraft,
   type GeoPoint,
+  type MountModel,
   type CalibrationRef,
   type CameraPose,
   type Config,
@@ -198,6 +200,20 @@ const SHORT_LEAD_SEC = 0.4;
 /** Velocity-pursuit PI gains (exported for the pass archive's tuning snapshot). */
 export const PURSUIT_KP = 1.0; // 1/s — 1.3 rang at ~0.5 Hz on slow legs (measured tilt latency ~0.1 s)
 export const PURSUIT_KI = 0.6; // 1/s² — converges in ~2-3 s, anti-windup below
+
+/**
+ * A world-frame aim prediction in HEAD axes: mount-frame az/el (pan·gain +
+ * offset, tilt·gain + offset) and their rates. On a level mount it is the
+ * prediction itself; on a tilted base the two differ everywhere.
+ */
+function headAxes(
+  p: { azEl: { azDeg: number; elDeg: number }; azRateDps: number; elRateDps: number },
+  m: MountModel,
+): { azDeg: number; elDeg: number; azRateDps: number; elRateDps: number } {
+  const f = mountFrameFromWorld(p.azEl.azDeg, p.azEl.elDeg, m);
+  const r = mountRatesFromWorld(p.azEl.azDeg, p.azEl.elDeg, p.azRateDps, p.elRateDps, m);
+  return { azDeg: f.azDeg, elDeg: f.elDeg, azRateDps: r.panDps * m.panGain, elRateDps: r.tiltDps * m.tiltGain };
+}
 
 /**
  * Discrete moments in a pass, mirrored from the recorder sites so observers
@@ -1026,8 +1042,9 @@ export class ControlLoop {
         // Park on the exit azimuth, tilt just under vertical, fly-through.
         az = hold!.azDeg;
         el = hold!.elDeg;
-        this.azTracker.reset(az);
-        this.elTracker.reset(el);
+        const hm = mountFrameFromWorld(az, el, cfg.mount);
+        this.azTracker.reset(hm.azDeg);
+        this.elTracker.reset(hm.elDeg);
         this.lastObservedTs = 0; // re-seed the filters on regime exit
         // The crossing reverses the needed pan rate — an inbound-learned
         // rate deficit is wrong-signed outbound.
@@ -1046,16 +1063,26 @@ export class ControlLoop {
           // the frame; the vision correction holds the plane meanwhile.
           const hPrev = this.lastState?.target.hfovDeg ?? 56;
           const stepMax = hPrev < 10 ? 0.06 * hPrev : Infinity;
-          this.azTracker.observe(pa.azEl.azDeg, dtFix, pa.azRateDps, stepMax);
-          this.elTracker.observe(prediction.azEl.elDeg, dtFix, prediction.elRateDps, stepMax);
+          const hp = headAxes(pa, cfg.mount);
+          const ht = headAxes(prediction, cfg.mount);
+          this.azTracker.observe(hp.azDeg, dtFix, hp.azRateDps, stepMax);
+          this.elTracker.observe(ht.elDeg, dtFix, ht.elRateDps, stepMax);
           this.lastObservedTs = fixTs;
         }
         // Follow the predictor's current rates between fixes (see steer()).
-        this.azTracker.steer((azLeadPred ?? prediction).azRateDps);
-        this.elTracker.steer(prediction.elRateDps);
+        // The trackers run in HEAD axes (mount-frame az/el): their slew
+        // clamps are the head's real speed limits, and their rates are the
+        // pan/tilt feedforward. In world az/el the clamp cut the setpoint
+        // short near the world zenith, where the azimuth rate is huge but the
+        // tilted head's pan rate is not (UAL875: 82°/s world, 24°/s pan).
+        this.azTracker.steer(headAxes(azLeadPred ?? prediction, cfg.mount).azRateDps);
+        this.elTracker.steer(headAxes(prediction, cfg.mount).elRateDps);
         const dt = 1 / (cfg.predict.commandHz || 15);
-        az = this.azTracker.propagate(dt, cfg.limits.panSpeedMaxDps);
-        el = this.elTracker.propagate(dt, cfg.limits.tiltSpeedMaxDps);
+        const azM = this.azTracker.propagate(dt, cfg.limits.panSpeedMaxDps * Math.abs(cfg.mount.panGain));
+        const elM = this.elTracker.propagate(dt, cfg.limits.tiltSpeedMaxDps * Math.abs(cfg.mount.tiltGain));
+        const w = worldFromMountFrame(azM, elM, cfg.mount);
+        az = w.azDeg;
+        el = w.elDeg;
         // Vision steering: the bias estimator's output, applied through a
         // rate limiter — the correction GLIDES onto the aim instead of
         // stepping per detection (4 Hz steps read as jank at tele).
@@ -1159,9 +1186,10 @@ export class ControlLoop {
           }
         }
       }
-      // Target's angular rate across the sky (for the zoom-out floor).
+      // Target's angular rate across the sky (for the zoom-out floor) —
+      // frame-independent, from the head-axis setpoint rates.
       const rateDps = Math.hypot(
-        this.azTracker.rate * Math.cos((el * Math.PI) / 180),
+        this.azTracker.rate * Math.cos((this.elTracker.pos * Math.PI) / 180),
         this.elTracker.rate,
       );
       // How far the camera is trailing its command right now, deg.
@@ -1352,9 +1380,8 @@ export class ControlLoop {
       // TONGVEO gear thresholds (6/3°/s → 13.5/8.3°). Hysteresis: the floor
       // relaxes only once the rates are ~15% below what set it.
       {
-        const r = mountRatesFromWorld(az, el, this.azTracker.rate, this.elTracker.rate, cfg.mount);
-        const panDps = r.panDps * cfg.mount.panGain;
-        const tiltDps = r.tiltDps * cfg.mount.tiltGain;
+        const panDps = this.azTracker.rate;
+        const tiltDps = this.elTracker.rate;
         const now0 = speedFloorHfov(panDps, tiltDps, cfg);
         const relaxed = speedFloorHfov(panDps * 1.15, tiltDps * 1.15, cfg);
         const floorHfov = Math.max(now0, Math.min(this.speedFloorHfov, relaxed));
@@ -1599,11 +1626,11 @@ export class ControlLoop {
         // The setpoint's motion in HEAD axes: on the wedge the world az/el
         // rates are not the pan/tilt rates (UAL875 2026-10-14: −82°/s sent
         // where the head needed −24°/s; it swung 46° past the plane).
-        const ff = mountRatesFromWorld(
-          az, el, ffScale * this.azTracker.rate + corrAzRateDps, this.elTracker.rate + corrElRateDps, cfg.mount,
-        );
-        const ffPan = ff.panDps;
-        const ffTilt = ff.tiltDps;
+        // The vision correction's glide is in world az/el: map it through
+        // the lean too (the trackers are already in head axes).
+        const corrFf = mountRatesFromWorld(az, el, corrAzRateDps, corrElRateDps, cfg.mount);
+        const ffPan = (ffScale * this.azTracker.rate) / cfg.mount.panGain + corrFf.panDps;
+        const ffTilt = this.elTracker.rate / cfg.mount.tiltGain + corrFf.tiltDps;
         let panRate = ffPan + KP * this.errPanLP + this.panRateI;
         let tiltRate = ffTilt + KP * this.errTiltLP + this.tiltRateI;
         // Latency-aware braking on the CATCH-UP part of the command: a head
@@ -1816,8 +1843,9 @@ export class ControlLoop {
         predEl: prediction.azEl.elDeg,
         truthAz: prediction.nowAzEl.azDeg,
         truthEl: prediction.nowAzEl.elDeg,
-        rateAzDps: this.azTracker.rate,
-        rateElDps: this.elTracker.rate,
+        // World rates — vision compares them with world-frame track velocities.
+        rateAzDps: (azLeadPred ?? prediction).azRateDps,
+        rateElDps: prediction.elRateDps,
         panDeg: poseEst.panDeg,
         tiltDeg: poseEst.tiltDeg,
         hfov: hfovFromZoomUnits(poseEst.zoomUnits, cfg.zoom.fovLut),
