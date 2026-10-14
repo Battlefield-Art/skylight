@@ -303,21 +303,11 @@ export class ViscaCamera implements CameraDriver {
     return st.onHi ? hiStep : loStep;
   }
 
-  /** Tilt rests only on detents ~0.33° apart (probed at full tele: a
-   *  pulse moves 0 or 22-24 encoder units, never less). Below the slowest
-   *  gear the dither's bursts slid one or two detents and the loop then
-   *  pulsed back — a 0.3-0.8° up-down limit cycle, 15-35% of the frame
-   *  height at 4° HFOV. The stepper below takes exactly one detent per
-   *  pulse, only in the direction the plane needs. */
-  static readonly TILT_DETENT_DEG = 0.33;
-  /** 120 ms at speed 2 moved exactly one detent in every probe trial; 40-80 ms
-   *  sometimes moved nothing (and the stall let a climbing plane out of frame). */
-  private static readonly TILT_PULSE_MS = 120;
-  /** Above this the stepper's ~3 pulses/s cadence can't keep up (ASA1403
-   *  climbing at 0.9°/s: tilt froze 0.8 s, lag 1.2°, plane left the frame). */
-  private static readonly STEPPER_MAX_DPS = 0.45;
-  /** Zoom from which the stepper replaces dithering (detent vs frame). */
-  private static readonly STEPPER_MIN_ZOOM = 900;
+  /** Tilt detent stepping (profile.tiltStepper): below the slowest gear the
+   *  dither's bursts slid one or two detents and the loop then pulsed back
+   *  — a 0.3-0.8° up-down limit cycle, 15-35% of the frame height at 4°
+   *  HFOV. The stepper takes exactly one detent per pulse, only in the
+   *  direction the plane needs. */
   private tiltStepper = { acc: 0, until: 0, dir: 0, lastAt: 0, active: false };
 
   /**
@@ -337,9 +327,11 @@ export class ViscaCamera implements CameraDriver {
     const dt = st.lastAt ? Math.min(0.2, (now - st.lastAt) / 1000) : 0;
     st.lastAt = now;
     const slowest = table[0][1];
+    const P = this.o.profile().tiltStepper;
     const engaged =
-      zoom >= ViscaCamera.STEPPER_MIN_ZOOM &&
-      Math.abs(want) < Math.min(0.8 * slowest, ViscaCamera.STEPPER_MAX_DPS);
+      P != null &&
+      zoom >= P.minZoomUnits &&
+      Math.abs(want) < Math.min(0.8 * slowest, P.maxDps);
     if (!engaged) {
       st.active = false;
       st.acc = 0;
@@ -347,14 +339,14 @@ export class ViscaCamera implements CameraDriver {
       return null;
     }
     st.active = true;
-    if (now < st.until) return { step: 2, dir: st.dir };
-    const D = ViscaCamera.TILT_DETENT_DEG;
+    if (now < st.until) return { step: P.pulseSetting, dir: st.dir };
+    const D = P.detentDeg;
     st.acc = Math.max(-1.5 * D, Math.min(1.5 * D, st.acc + want * dt));
     if (Math.abs(st.acc) >= 0.6 * D) {
       st.dir = Math.sign(st.acc);
       st.acc -= st.dir * D;
-      st.until = now + ViscaCamera.TILT_PULSE_MS;
-      return { step: 2, dir: st.dir };
+      st.until = now + P.pulseMs;
+      return { step: P.pulseSetting, dir: st.dir };
     }
     return { step: STOP_STEP, dir: 0 };
   }

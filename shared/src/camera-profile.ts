@@ -42,6 +42,21 @@ export interface CameraProfile {
      */
     parkTiltMaxDeg: number;
   };
+  /**
+   * Heads whose tilt rests on discrete detents: below the slowest speed,
+   * step one detent at a time with a short pulse instead of dithering
+   * (which slides 1-2 detents and rocks). Omit for a smooth tilt.
+   */
+  tiltStepper?: {
+    detentDeg: number;
+    /** Pulse that moves exactly one detent: duration and speed setting. */
+    pulseMs: number;
+    pulseSetting: number;
+    /** Fastest rate the stepper's cadence keeps up with, deg/s. */
+    maxDps: number;
+    /** From this zoom (lens units) a detent is a visible jump in the frame. */
+    minZoomUnits: number;
+  };
 }
 
 /** Rate at `step` within one row: linear between neighbouring measured steps. */
@@ -207,4 +222,9 @@ export const TONGVEO_PROFILE: CameraProfile = {
   // auto-flip; pan then drives BACKWARDS until tilt is below ~65° (UAL433,
   // KAL024 2026-10-11). Parks hold 6° short of vertical.
   mechanical: { parkTiltMaxDeg: 84 },
+  // Tilt rests on detents ~0.33° apart (probed at tele: a pulse moves 0 or
+  // 22-24 encoder units). 120 ms at speed 2 moved exactly one detent in every
+  // trial (40-80 ms sometimes nothing). Above ~0.45°/s the ~3 pulses/s
+  // cadence falls behind (ASA1403: tilt froze 0.8 s, plane left the frame).
+  tiltStepper: { detentDeg: 0.33, pulseMs: 120, pulseSetting: 2, maxDps: 0.45, minZoomUnits: 900 },
 };
