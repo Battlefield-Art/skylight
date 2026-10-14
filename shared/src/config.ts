@@ -175,6 +175,13 @@ export interface TrackerConfig {
      * steadier, sharper-looking shot.
      */
     minHfovDeg: number;
+    /**
+     * minHfovDeg applies only while the plane moves across the sky faster
+     * than this, deg/s (0 = always). Wobble is worst on fast planes; a slow,
+     * distant plane can use the full tele (3.4°) — at 4.1° it was 18%
+     * smaller for no steadiness gain (2026-10-13 quality audit).
+     */
+    minHfovAboveRateDps: number;
     /** HFOV used when auto is off, deg. */
     manualHfovDeg: number;
     /** Measured zoom-units -> HFOV samples (endpoints from the datasheet). */
@@ -601,6 +608,7 @@ export const DEFAULT_CONFIG: Config = {
       lockedSigmaDeg: 0.35,
       fillFrac: 0.28,
       minHfovDeg: 0,
+      minHfovAboveRateDps: 0,
       manualHfovDeg: 20,
       // Datasheet endpoints; refined empirically at M4.
       fovLut: [
