@@ -190,13 +190,16 @@ export interface TrackerConfig {
     /** Measured zoom-units -> HFOV samples (endpoints from the datasheet). */
     fovLut: FovPoint[];
     /**
-     * Motor-smoothness zoom floor: HFOV ≥ rateFloorDegPerDps × the target's
-     * angular rate (deg/s), capped at rateFloorMaxDeg. The dither's velocity
-     * steps are fixed in deg/s, so a fast (close) plane at full tele lurches;
-     * holding the zoom proportionally wider keeps the picture steady.
+     * Speed-step zoom floor (any camera — from tracker.camera.speedSurface):
+     * holding a rate between two of the camera's discrete speeds means
+     * alternating between them, and the picture lurches by that speed jump
+     * ÷ the field of view. Never zoom tighter than keeps that jump at or
+     * below maxSpeedStepFwps frame-widths per second on either axis, nor
+     * where the rate needed exceeds speedReachFrac of the camera's top speed
+     * at that zoom (no headroom to catch up). Lower = smoother, wider.
      */
-    rateFloorDegPerDps: number;
-    rateFloorMaxDeg: number;
+    maxSpeedStepFwps: number;
+    speedReachFrac: number;
     /**
      * Zoom STOPS, lens units: every zoom command snaps to one of these (never
      * tighter than wanted). The lens re-focuses (zoom tracking, then the
@@ -619,8 +622,9 @@ export const DEFAULT_CONFIG: Config = {
         { units: 0, hfovDeg: 62.3 },
         { units: 16384, hfovDeg: 3.46 },
       ],
-      rateFloorDegPerDps: 2.5,
-      rateFloorMaxDeg: 12,
+      // ≈ the old hand-tuned rate/gear floors on the first camera (2026-10-14)
+      maxSpeedStepFwps: 0.45,
+      speedReachFrac: 0.8,
       stopUnits: [],
       stopRatio: 1.3,
     },
@@ -697,6 +701,7 @@ export function mergeConfig(base: Config, patch: Partial<Config>): Config {
 const RETIRED_TRACKER_KEYS = {
   predict: ["carrotHorizonSec", "carrotMs", "deadbandDeg", "alpha", "beta", "motorLatencySec"],
   vision: ["net"],
+  zoom: ["rateFloorDegPerDps", "rateFloorMaxDeg"],
 } as const;
 
 function withoutKeys<T extends object>(obj: T, keys: readonly string[]): T {
@@ -740,7 +745,7 @@ export function mergeTrackerConfig(
       ...withoutKeys({ ...base.predict, ...(patch.predict ?? {}) }, RETIRED_TRACKER_KEYS.predict),
       pursuit: "velocity", // the only mode; an old persisted "carrot" must not survive
     },
-    zoom: { ...base.zoom, ...(patch.zoom ?? {}) },
+    zoom: withoutKeys({ ...base.zoom, ...(patch.zoom ?? {}) }, RETIRED_TRACKER_KEYS.zoom),
     vision: withoutKeys({ ...base.vision, ...(patch.vision ?? {}) }, RETIRED_TRACKER_KEYS.vision),
     leveling: { ...base.leveling, ...(patch.leveling ?? {}) },
     liveStab: mergeLiveStab(base.liveStab, patch.liveStab),

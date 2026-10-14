@@ -24,8 +24,8 @@ import type {
   CameraPose,
   ViscaUnitScale,
   CameraProfile,
-  SpeedRow,
 } from "@shared/index.js";
+import { speedTableAt } from "@shared/index.js";
 import type { CameraDriver, TrackRateOptions } from "./driver.js";
 import {
   clampPose,
@@ -58,56 +58,6 @@ export interface ViscaOptions {
 // table the driver interpolates (linear in zoom between measured rows,
 // linear in step within a row). Speed step 0 may be a real gear; "stopped"
 // is STOP_STEP (-1).
-
-/** Rate at `step` within one row: linear between neighbouring measured steps. */
-function rateInRow(row: [number, number][], step: number): number {
-  if (step <= row[0][0]) return row[0][1];
-  for (let i = 1; i < row.length; i++) {
-    if (step <= row[i][0]) {
-      const [s0, r0] = row[i - 1];
-      const [s1, r1] = row[i];
-      return r0 + ((step - s0) / (s1 - s0)) * (r1 - r0);
-    }
-  }
-  return row[row.length - 1][1];
-}
-
-/**
- * The speed table that applies at `zoomUnits`: every step of the wide table,
- * each rate interpolated between the bracketing measured rows. Entries that
- * fail to rise ≥0.05°/s over the previous one are dropped so the dither's
- * bracket never divides by a zero-width gap (at tele most bytes collapse onto
- * the floor and only the rising ones remain).
- */
-export function speedTableAt(
-  axis: "pan" | "tilt",
-  zoomUnits: number,
-  rows: SpeedRow[],
-): [number, number][] {
-  const wide = rows[0][axis];
-  if (rows.length === 1) return wide;
-  const z = Math.max(rows[0].zoom, Math.min(rows[rows.length - 1].zoom, zoomUnits));
-  let lo = rows[0];
-  let hi = rows[rows.length - 1];
-  for (let i = 1; i < rows.length; i++) {
-    if (z <= rows[i].zoom) {
-      lo = rows[i - 1];
-      hi = rows[i];
-      break;
-    }
-  }
-  const f = hi.zoom === lo.zoom ? 0 : (z - lo.zoom) / (hi.zoom - lo.zoom);
-  const out: [number, number][] = [];
-  let last = -Infinity;
-  for (const [step] of wide) {
-    const r = rateInRow(lo[axis], step) * (1 - f) + rateInRow(hi[axis], step) * f;
-    if (r >= last + 0.05) {
-      out.push([step, r]);
-      last = r;
-    }
-  }
-  return out;
-}
 
 /** Sentinel for "axis not driven" — distinct from speed byte 0, a real gear. */
 const STOP_STEP = -1;

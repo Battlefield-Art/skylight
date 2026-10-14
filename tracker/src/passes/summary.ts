@@ -90,8 +90,8 @@ export interface PassTuning {
   tiltLatencySec: number;
   rippleDeg: number;
   rippleTeleDeg: number;
-  rateFloorDegPerDps: number;
-  rateFloorMaxDeg: number;
+  maxSpeedStepFwps: number;
+  speedReachFrac: number;
   lockedSigmaDeg: number;
   correctionSlewDps: number;
   kp: number;

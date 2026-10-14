@@ -6,6 +6,8 @@ import {
   angularSizeDeg,
   hfovFromZoomUnits,
   requiredHfovDeg,
+  speedStepAt,
+  speedTableAt,
   zoomUnitsFromHfov,
   type Aircraft,
   type AzEl,
@@ -97,4 +99,28 @@ export function zoomStopsHfov(z: TrackerConfig["zoom"]): number[] {
 /** Snap a wanted HFOV to the tightest stop that still frames it (never tighter). */
 export function snapToStop(wantHfov: number, stops: number[]): number {
   return stops.find((h) => h >= wantHfov * 0.97) ?? stops[stops.length - 1];
+}
+
+/**
+ * Tightest zoom stop the CAMERA can hold this plane smoothly at (see
+ * zoom.maxSpeedStepFwps): on both head axes, the rate needed must be within
+ * reach of that zoom's speeds, and the jump between the two speeds the drive
+ * alternates across must stay under the limit relative to the field of view.
+ * Derived only from the camera profile — no per-camera thresholds.
+ */
+export function speedFloorHfov(panDps: number, tiltDps: number, cfg: TrackerConfig): number {
+  const z = cfg.zoom;
+  const surface = cfg.camera.speedSurface;
+  const stops = zoomStopsHfov(z); // ascending: tele first
+  const maxStep = z.maxSpeedStepFwps > 0 ? z.maxSpeedStepFwps : Infinity;
+  const reach = z.speedReachFrac > 0 ? z.speedReachFrac : 1;
+  for (const hfov of stops) {
+    const units = zoomUnitsFromHfov(hfov, z.fovLut);
+    const ok = (["pan", "tilt"] as const).every((axis) => {
+      const rate = axis === "pan" ? panDps : tiltDps;
+      return speedStepAt(speedTableAt(axis, units, surface), rate, reach) / hfov <= maxStep;
+    });
+    if (ok) return hfov;
+  }
+  return stops[stops.length - 1];
 }

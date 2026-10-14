@@ -54,7 +54,7 @@ import {
 import { planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
-import { chooseZoom, snapToStop, zoomStopsHfov } from "./pointing/zoom.js";
+import { chooseZoom, snapToStop, speedFloorHfov, zoomStopsHfov } from "./pointing/zoom.js";
 import { distanceBand, FocusController } from "./camera/focus.js";
 import { nextPlane, type NextPlane } from "./pointing/nextPass.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
@@ -318,7 +318,7 @@ export class ControlLoop {
   private wrapReleasedAt = 0;
   private wrapGoal = 0;
   /** Gear-aware zoom floor currently applied (0 = none); hysteresis state. */
-  private gearFloorHfov = 0;
+  private speedFloorHfov = 0;
   /** Wall time of the most recent fresh detection (survives lastDetection = null). */
   private lastDetSeenAt = 0;
   /** This pass was classified as a zenith pass inbound (see zenithHold). */
@@ -1344,39 +1344,25 @@ export class ControlLoop {
           this.ladderIdx = clamped;
         }
       }
-      // Motor-smoothness floor: the dither's velocity steps are fixed in
-      // deg/s, so their visibility scales with 1/HFOV × the step size the
-      // wanted rate sits between. A fast-moving (close) plane at full tele
-      // dithers across the 3→5→7°/s gears and the picture lurches; hold the
-      // zoom proportionally wider while the rate is high (the plane is
-      // close and big then anyway).
+      // Speed-step floor, from the camera profile (zoom.maxSpeedStepFwps):
+      // never zoom tighter than the camera can hold this plane's head rates
+      // smoothly — within reach of its speeds at that zoom, and with the jump
+      // between the two speeds it must alternate across small against the
+      // field of view. Replaces the hand-tuned rate floor (2.5°/(°/s)) and the
+      // TONGVEO gear thresholds (6/3°/s → 13.5/8.3°). Hysteresis: the floor
+      // relaxes only once the rates are ~15% below what set it.
       {
-        let floorHfov = clamp(
-          (cfg.zoom.rateFloorDegPerDps ?? 2.5) * rateDps, 0, cfg.zoom.rateFloorMaxDeg ?? 12,
-        );
-        // Gear-aware floor on the PAN AXIS rate (not the sky rate): at full
-        // tele the firmware's speed table jumps from ~3°/s (byte 12) to
-        // ~22°/s (byte 18) with nothing between, and short pulses of the fast
-        // gear deliver a fraction of their nominal speed. A near-zenith leg
-        // needing 6-10°/s of pan at 5° HFOV lagged the command by 7° for two
-        // seconds, then caught up at 18°/s and overshot (SCX395). Hold the
-        // view wider while the pan axis is that fast; hysteresis so the zoom
-        // doesn't flap around the thresholds.
-        // The HEAD's pan rate — on the wedge not the world azimuth rate.
-        const panAxisRate = Math.abs(
-          mountRatesFromWorld(az, el, this.azTracker.rate, this.elTracker.rate, cfg.mount).panDps * cfg.mount.panGain,
-        );
-        const g = this.gearFloorHfov;
-        const next =
-          panAxisRate > 6 || (g >= 13.5 && panAxisRate > 5) ? 13.5
-          : panAxisRate > 3 || (g >= 8.3 && panAxisRate > 2.5) ? 8.3
-          : 0;
-        this.gearFloorHfov = next;
-        floorHfov = Math.max(floorHfov, next);
+        const r = mountRatesFromWorld(az, el, this.azTracker.rate, this.elTracker.rate, cfg.mount);
+        const panDps = r.panDps * cfg.mount.panGain;
+        const tiltDps = r.tiltDps * cfg.mount.tiltGain;
+        const now0 = speedFloorHfov(panDps, tiltDps, cfg);
+        const relaxed = speedFloorHfov(panDps * 1.15, tiltDps * 1.15, cfg);
+        const floorHfov = Math.max(now0, Math.min(this.speedFloorHfov, relaxed));
+        this.speedFloorHfov = floorHfov;
         if (zoom.hfovDeg < floorHfov) {
           zoom.hfovDeg = floorHfov;
           zoom.zoomUnits = zoomUnitsFromHfov(floorHfov, cfg.zoom.fovLut);
-          this.zoomWhy = next > 0 && floorHfov === next ? "gearFloor" : "rateFloor";
+          this.zoomWhy = "speedFloor";
         }
       }
       // Zoom DEBOUNCE: a zoom command is a motor move and a vision reset, so

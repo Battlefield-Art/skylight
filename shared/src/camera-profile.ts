@@ -36,6 +36,76 @@ export interface CameraProfile {
   };
 }
 
+/** Rate at `step` within one row: linear between neighbouring measured steps. */
+function rateInRow(row: [number, number][], step: number): number {
+  if (step <= row[0][0]) return row[0][1];
+  for (let i = 1; i < row.length; i++) {
+    if (step <= row[i][0]) {
+      const [s0, r0] = row[i - 1];
+      const [s1, r1] = row[i];
+      return r0 + ((step - s0) / (s1 - s0)) * (r1 - r0);
+    }
+  }
+  return row[row.length - 1][1];
+}
+
+/**
+ * The speed table that applies at `zoomUnits`: every step of the wide table,
+ * each rate interpolated between the bracketing measured rows. Entries that
+ * fail to rise ≥0.05°/s over the previous one are dropped so the dither's
+ * bracket never divides by a zero-width gap (at tele most bytes collapse onto
+ * the floor and only the rising ones remain).
+ */
+export function speedTableAt(
+  axis: "pan" | "tilt",
+  zoomUnits: number,
+  rows: SpeedRow[],
+): [number, number][] {
+  const wide = rows[0][axis];
+  if (rows.length === 1) return wide;
+  const z = Math.max(rows[0].zoom, Math.min(rows[rows.length - 1].zoom, zoomUnits));
+  let lo = rows[0];
+  let hi = rows[rows.length - 1];
+  for (let i = 1; i < rows.length; i++) {
+    if (z <= rows[i].zoom) {
+      lo = rows[i - 1];
+      hi = rows[i];
+      break;
+    }
+  }
+  const f = hi.zoom === lo.zoom ? 0 : (z - lo.zoom) / (hi.zoom - lo.zoom);
+  const out: [number, number][] = [];
+  let last = -Infinity;
+  for (const [step] of wide) {
+    const r = rateInRow(lo[axis], step) * (1 - f) + rateInRow(hi[axis], step) * f;
+    if (r >= last + 0.05) {
+      out.push([step, r]);
+      last = r;
+    }
+  }
+  return out;
+}
+
+
+/**
+ * Holding `rateDps` with discrete speeds means alternating between the two
+ * settings that bracket it (or between stopped and the slowest one): the
+ * size of that speed jump, deg/s — what the picture shows as a lurch. 0 when
+ * the rate sits on a setting; Infinity beyond `reachFrac` of the top speed
+ * (no headroom left to catch up).
+ */
+export function speedStepAt(table: [number, number][], rateDps: number, reachFrac = 1): number {
+  const r = Math.abs(rateDps);
+  if (r < 1e-3) return 0;
+  const top = table[table.length - 1][1];
+  if (r > reachFrac * top) return Infinity;
+  if (r < table[0][1]) return table[0][1];
+  for (let i = 1; i < table.length; i++) {
+    if (r <= table[i][1]) return table[i][1] - table[i - 1][1];
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // TONGVEO VISCA-over-IP PTZ (20×), the first characterized camera.
 // Drive-speed step -> SUSTAINED deg/s, as a SURFACE over zoom.
