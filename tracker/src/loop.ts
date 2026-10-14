@@ -1304,7 +1304,14 @@ export class ControlLoop {
             // aim 0.5° off it, because "lost" used to mean wide for good.
             const t0 = Math.max(since, this.acqHoldAt, seen ? this.lastDetSeenAt + LADDER_LOST_MS : 0);
             const tAcq = (now - t0) % ACQ_CYCLE_MS;
-            const settled = now - t0 > 1500 && lagDeg < 2;
+            // A departure still below the roofline and climbing toward it:
+            // pre-zoom to the search framing while waiting at the roofline,
+            // so the climb-out is filmed at that size and found sooner. (The
+            // held search clock kept these at full wide until first lock —
+            // 2026-10-14 SFO departures locked 11-26 s after lift-off, at 16-24°
+            // elevation, waiting at 33-54° HFOV.)
+            const climbingToSkyline = !visible && (prediction.elRateDps ?? 0) > 0.2;
+            const settled = (climbingToSkyline || now - t0 > 1500) && lagDeg < 2;
             const ang = zoom.angularSizeDeg ?? 1;
             const acqHfov = clamp(24 * ang, 6, wideHfov);
             const sizedRung = Math.max(0, Math.floor(Math.log(acqHfov / wideHfov) / Math.log(RUNG)));
