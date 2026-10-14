@@ -2064,7 +2064,7 @@ export class ControlLoop {
     const atPre = this.aimAt(frameT);
     const geomNow = frameGeom(pose, cfg.mount, hfov);
     if (lockedBefore && atPre) {
-      const p = lockedBefore.positionAt(frameT);
+      const p = this.tracks.lockedPositionAt(frameT)!;
       const e = frameGeom(atPre, cfg.mount, atPre.hfov).toFrame(p.azDeg, p.elDeg);
       exX = clamp01(e.cx);
       exY = clamp01(e.cy);
