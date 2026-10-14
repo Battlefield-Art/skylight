@@ -12,6 +12,7 @@ import type {
   ViscaUnitScale,
 } from "./camera.js";
 import type { FovPoint } from "./aim.js";
+import { TONGVEO_PROFILE, type CameraProfile } from "./camera-profile.js";
 import { SFO_AIRPORT, type Airport } from "./airport.js";
 import { CONSTELLATIONS } from "./stars.js";
 
@@ -85,6 +86,8 @@ export interface TrackerConfig {
   site: GeoPoint;
   limits: CameraLimits;
   units: ViscaUnitScale;
+  /** How the camera moves — measured data (docs/camera-profile.md). */
+  camera: CameraProfile;
   mount: MountModel;
   targetMode: TargetMode;
   target: TargetCriteria;
@@ -571,6 +574,7 @@ export const DEFAULT_CONFIG: Config = {
       zoomWideUnits: 0,
       zoomTeleUnits: 16384,
     },
+    camera: TONGVEO_PROFILE,
     mount: {
       panOffsetDeg: 0,
       tiltOffsetDeg: 0,
@@ -724,6 +728,12 @@ export function mergeTrackerConfig(
     site: { ...base.site, ...(patch.site ?? {}) },
     limits: { ...base.limits, ...(patch.limits ?? {}) },
     units: { ...base.units, ...(patch.units ?? {}) },
+    camera: {
+      ...base.camera,
+      ...(patch.camera ?? {}),
+      absolute: { ...base.camera.absolute, ...(patch.camera?.absolute ?? {}) },
+      lens: { ...base.camera.lens, ...(patch.camera?.lens ?? {}) },
+    },
     mount: { ...base.mount, ...(patch.mount ?? {}) },
     target: { ...base.target, ...(patch.target ?? {}) },
     predict: {

@@ -1,7 +1,8 @@
 // Speed-vs-zoom SURFACE: sustained drive rate for each pan/tilt speed byte at
 // several zoom positions, by pose-encoder two-timed sweep (positions read
 // only while stationary). This firmware scales drive speed with zoom, and the
-// result is camera/visca.ts SPEED_SURFACE (paste the RESULTS_JSON rows).
+// result is the camera profile's speedSurface (tracker.camera, see
+// shared/src/camera-profile.ts; paste the RESULTS_JSON rows).
 //
 // When: after a firmware update or a camera swap, or when tele tracking
 // shows the integrator winding up (the dither's model no longer matches).

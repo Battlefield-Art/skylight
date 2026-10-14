@@ -23,6 +23,8 @@ import type {
   CameraLimits,
   CameraPose,
   ViscaUnitScale,
+  CameraProfile,
+  SpeedRow,
 } from "@shared/index.js";
 import type { CameraDriver, TrackRateOptions } from "./driver.js";
 import {
@@ -47,93 +49,15 @@ export interface ViscaOptions {
   inquiryHz?: number;
   /** Max absolute-position command rate, Hz (latest wins between sends). */
   commandHz?: number;
+  /** How this camera moves (tracker.camera) — read live, so config edits apply. */
+  profile: () => CameraProfile;
 }
 
-// Drive-speed step -> SUSTAINED deg/s, as a SURFACE over zoom.
-//
-// This firmware scales pan/tilt drive speed with zoom ("speed by zoom",
-// measured 2026-10-10 with scripts/probe-mech.ts + probe-speed-zoom.ts): pan
-// byte 1 is ~7°/s at full wide but ~1.4°/s from zoom ≈900 up, and every byte
-// compresses toward the ~1.47°/s floor as the lens goes tele. The June tables
-// were measured wide only, so zoomed in — exactly where smoothness matters —
-// the dither's model ran ~5× hot and the loop's integrator saturated. The
-// driver therefore interpolates a per-zoom table from the rows below (linear
-// in zoom units between measured rows, linear in step within a row).
-//
-// Row 0 (wide) keeps the full June tables (two-timed-sweep; low steps
-// re-measured by video frame-shift 2026-06-10). Speed byte 0x00 is a REAL
-// slow gear (~1.47°/s), not a no-op — "stopped" is STOP_STEP (-1).
-const PAN_SPEEDS_WIDE: [number, number][] = [
-  [0, 1.47], [1, 7.9], [2, 17.6], [3, 21.2], [4, 26.55], [5, 29.32], [6, 31.05],
-  [7, 35.57], [9, 41.5], [11, 44.59], [12, 47.26], [13, 50.06], [16, 54.15],
-  [17, 56.01], [18, 57.85], [19, 64.76], [20, 67.56], [21, 71.53],
-  [22, 74.23], [24, 75.16],
-];
-const TILT_SPEEDS_WIDE: [number, number][] = [
-  [0, 1.47], [1, 3.0], [2, 4.5], [3, 6.2], [4, 7.67], [5, 9.29], [6, 11.86],
-  [7, 13.36], [8, 13.8], [9, 16.82], [10, 17.68], [11, 20.31], [13, 23.52],
-  [15, 24.78], [16, 26.14], [17, 30.45], [19, 33.5],
-];
-
-/** One measured zoom position of the drive-rate surface. */
-export interface SpeedRow {
-  /** Zoom units (0 = wide). */
-  zoom: number;
-  pan: [number, number][];
-  tilt: [number, number][];
-}
-
-/**
- * Measured rows, wide → tele. Rows beyond the wide one list the steps that
- * were measured at that zoom; unmeasured steps interpolate within the row.
- * (Filled from probe-speed-zoom.ts RESULTS_JSON — see speedSurface below.)
- */
-export const SPEED_SURFACE: SpeedRow[] = [
-  { zoom: 0, pan: PAN_SPEEDS_WIDE, tilt: TILT_SPEEDS_WIDE },
-  // Measured 2026-10-10 (probe-speed-zoom.ts, pose two-timed sweep, zoom read
-  // back from the lens). Byte 0 is the 1.47°/s floor gear at every zoom
-  // (probe-mech.ts: 1.53 @900, 1.46 @1437). Up to ~zoom 300 nothing changes;
-  // from ~600 the firmware remaps bytes onto progressively slower native
-  // speeds, until at 1200+ bytes 1-2 sit on the floor and 3-4 on ~2.9°/s.
-  {
-    zoom: 300,
-    pan: [[0, 1.47], [1, 7.43], [2, 14.77], [3, 20.92], [4, 28.55], [6, 32.71], [8, 38.7], [12, 41.95], [18, 61.08]],
-    tilt: [[0, 1.47], [1, 3.4], [2, 4.91], [3, 5.46], [5, 9.84], [8, 12.28]],
-  },
-  {
-    zoom: 600,
-    pan: [[0, 1.47], [1, 2.78], [2, 7.48], [3, 7.79], [4, 15.63], [6, 20.83], [8, 28.24], [12, 33.6], [18, 44.41]],
-    tilt: [[0, 1.47], [1, 1.7], [2, 3.25], [3, 4.12], [5, 7.76], [8, 11.63]],
-  },
-  {
-    zoom: 900,
-    pan: [[0, 1.47], [1, 1.49], [2, 3.12], [3, 6.6], [4, 7.82], [6, 13.98], [8, 22.11], [12, 23.67], [18, 35.73]],
-    tilt: [[0, 1.47], [1, 1.7], [2, 3.26], [3, 5.13], [5, 6.51], [8, 10.12]],
-  },
-  {
-    zoom: 1200,
-    // Bytes 12-18 / tilt 10 re-measured 2026-10-10 17:55 (probe-speed-zoom.ts).
-    pan: [[0, 1.47], [1, 1.32], [2, 1.39], [3, 2.8], [4, 2.97], [6, 7.0], [8, 7.0], [12, 14.84], [16, 21.11], [18, 23.19]],
-    tilt: [[0, 1.47], [1, 1.36], [2, 1.61], [3, 2.93], [5, 3.08], [8, 4.32], [10, 6.15]],
-  },
-  // Full tele (measured 2026-10-10 15:17, probe-speed-zoom.ts): bytes 0-4
-  // are ALL the ~1.5°/s floor gear on both axes (pan 1.56/1.48/1.47/1.32/
-  // 1.41, tilt 1.61/1.55/1.44/1.71/1.43). Bytes ≥5 still carried over from
-  // the 1200 row until measured. (The earlier guess of 2.9°/s at bytes 3-4
-  // made the dither "deliver" a rate the motor never produced — the loop's
-  // integrator wound up and hunted at tele.)
-  // Second probe 15:25: bytes 5-6 are still the floor; byte 8 = 2.63 (pan) /
-  // 2.93 (tilt); byte 12 = 2.97 (pan). Byte 18 unmeasured (kept from 1200).
-  {
-    zoom: 1437,
-    // Third probe 2026-10-10 17:52 (bytes 12-18 pan, 8-20 tilt): the fast
-    // pan gear at full tele is ~7.4°/s (bytes 16-18), NOT the 22°/s carried
-    // over from the 1200 row — bytes 12-15 are all ~3°/s. Tilt tops out at
-    // ~4.6°/s (byte 20). So at tele the only gears are ~1.5 / ~3 / ~7.4°/s.
-    pan: [[0, 1.47], [6, 1.5], [8, 2.63], [12, 2.97], [14, 3.14], [16, 7.06], [18, 7.39]],
-    tilt: [[0, 1.5], [6, 1.6], [8, 2.93], [12, 3.06], [14, 3.25], [16, 4.09], [20, 4.62]],
-  },
-];
+// Drive-speed step -> SUSTAINED deg/s comes from the camera profile
+// (tracker.camera.speedSurface, shared/src/camera-profile.ts): a per-zoom
+// table the driver interpolates (linear in zoom between measured rows,
+// linear in step within a row). Speed step 0 may be a real gear; "stopped"
+// is STOP_STEP (-1).
 
 /** Rate at `step` within one row: linear between neighbouring measured steps. */
 function rateInRow(row: [number, number][], step: number): number {
@@ -158,7 +82,7 @@ function rateInRow(row: [number, number][], step: number): number {
 export function speedTableAt(
   axis: "pan" | "tilt",
   zoomUnits: number,
-  rows: SpeedRow[] = SPEED_SURFACE,
+  rows: SpeedRow[],
 ): [number, number][] {
   const wide = rows[0][axis];
   if (rows.length === 1) return wide;
@@ -187,15 +111,7 @@ export function speedTableAt(
 
 /** Sentinel for "axis not driven" — distinct from speed byte 0, a real gear. */
 const STOP_STEP = -1;
-/** Absolute moves run flat out (pan 0x18 / tilt 0x14, the maxima)... */
-const ABS_PAN_SPEED = 0x18;
-const ABS_TILT_SPEED = 0x14;
-/** ...except LONG pan slews (dead-zone wraps, big re-targets): the pan
- *  pointing jumped ~+2° across a wrap pass (SWA2306, 2026-10-11; landmark
- *  checks saw −2.0/+1.0° jumps that afternoon) — the motor missing steps
- *  while flinging the head through ~300°. */
-const ABS_PAN_SPEED_LONG = 0x12;
-const LONG_PAN_MOVE_DEG = 120;
+
 
 /** Sustained deg/s of a discrete speed step (nearest table entry). */
 function stepRate(table: [number, number][], step: number): number {
@@ -546,8 +462,8 @@ export class ViscaCamera implements CameraDriver {
     const z = this.currentZoom();
     const R = opts?.rippleDeg ?? ViscaCamera.DITHER_RIPPLE_DEG;
     const RT = opts?.rippleTiltDeg ?? R;
-    const panStep = this.pickDithered(this.panDither, speedTableAt("pan", z), pd, now, R);
-    const tiltTable = speedTableAt("tilt", z);
+    const panStep = this.pickDithered(this.panDither, speedTableAt("pan", z, this.o.profile().speedSurface), pd, now, R);
+    const tiltTable = speedTableAt("tilt", z, this.o.profile().speedSurface);
     let tiltStep: number;
     const stepper = this.tiltDetentStep(tiltTable, td, z, now);
     if (stepper !== null) {
@@ -750,9 +666,9 @@ export class ViscaCamera implements CameraDriver {
     // Dead-reckon jog motion too (the limit guard rides on these).
     const z = this.currentZoom();
     this.cmdPanDps =
-      Math.abs(pan) > 0.05 ? Math.sign(pan) * stepRate(speedTableAt("pan", z), panSpeed) : 0;
+      Math.abs(pan) > 0.05 ? Math.sign(pan) * stepRate(speedTableAt("pan", z, this.o.profile().speedSurface), panSpeed) : 0;
     this.cmdTiltDps =
-      Math.abs(tilt) > 0.05 ? Math.sign(tilt) * stepRate(speedTableAt("tilt", z), tiltSpeed) : 0;
+      Math.abs(tilt) > 0.05 ? Math.sign(tilt) * stepRate(speedTableAt("tilt", z, this.o.profile().speedSurface), tiltSpeed) : 0;
     this.sendCommand([
       0x81, 0x01, 0x06, 0x01,
       panSpeed, tiltSpeed,
@@ -881,10 +797,11 @@ export class ViscaCamera implements CameraDriver {
     if (moved) {
       const p = nibbles(panDegToUnits(w.panDeg, this.o.units), 4);
       const t = nibbles(tiltDegToUnits(w.tiltDeg, this.o.units), 4);
-      const longMove = this.pose != null && Math.abs(w.panDeg - this.pose.panDeg) > LONG_PAN_MOVE_DEG;
+      const abs = this.o.profile().absolute;
+      const longMove = this.pose != null && Math.abs(w.panDeg - this.pose.panDeg) > abs.longPanMoveDeg;
       this.sendCommand([
         0x81, 0x01, 0x06, 0x02,
-        longMove ? ABS_PAN_SPEED_LONG : ABS_PAN_SPEED, ABS_TILT_SPEED,
+        longMove ? abs.longPanSetting : abs.panSetting, abs.tiltSetting,
         ...p, ...t, 0xff,
       ]);
       this.lastSent = { panDeg: w.panDeg, tiltDeg: w.tiltDeg };
@@ -952,7 +869,8 @@ export class ViscaCamera implements CameraDriver {
   }
 
   /**
-   * The lens only travels toward the zoom it was sent (~500 units/s), so a
+   * The lens only travels toward the zoom it was sent (profile lens travel
+   * rate), so a
    * reading outside [last reading … commanded] plus the travel possible since
    * is not where the lens is. 2026-10-14: 11 such readings in 20 passes
    * (1085 → 113 → 1173; values 32-300, mostly 104-120, at lens 850-1330 —
@@ -971,7 +889,8 @@ export class ViscaCamera implements CameraDriver {
     const cmd = this.lastSentZoom ?? cur;
     // Travel slack capped: after a reply stall (seen: 1.5 s+) the lens is
     // still somewhere between where it was and where it was sent.
-    const slack = 100 + 0.6 * Math.min(dt, 500);
+    const travelPerMs = this.o.profile().lens.travelUnitsPerSec / 1000;
+    const slack = 100 + 1.2 * travelPerMs * Math.min(dt, 500);
     const ok =
       cur == null || cmd == null ||
       (v >= Math.min(cur, cmd) - slack && v <= Math.max(cur, cmd) + slack);

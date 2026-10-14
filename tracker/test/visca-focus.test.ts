@@ -3,7 +3,7 @@
 // replies are injected through onMessage the way the socket would.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CameraLimits, ViscaUnitScale } from "@shared/index.js";
+import { TONGVEO_PROFILE, type CameraLimits, type ViscaUnitScale } from "@shared/index.js";
 import { ViscaCamera } from "../src/camera/visca.js";
 
 const UNITS: ViscaUnitScale = {
@@ -26,7 +26,7 @@ interface Internals {
 }
 
 function makeCam() {
-  const cam = new ViscaCamera({ ip: "127.0.0.1", port: 1, units: UNITS, limits: LIMITS });
+  const cam = new ViscaCamera({ ip: "127.0.0.1", port: 1, units: UNITS, limits: LIMITS, profile: () => TONGVEO_PROFILE });
   const sent: string[] = [];
   const c = cam as unknown as Internals;
   c.sendCommand = (p: number[]) => { sent.push(hex(p)); };

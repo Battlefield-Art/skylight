@@ -1,0 +1,128 @@
+// Camera profile: everything the tracker needs to know about how a PTZ camera
+// MOVES, as measured data (docs/camera-profile.md). The control loop and the
+// drivers read it from tracker.camera; nothing camera-specific belongs in
+// code. A new camera is characterized with the tracker/scripts probes and its
+// profile written to the config.
+
+/** One measured zoom position of the drive-rate surface. */
+export interface SpeedRow {
+  /** Zoom units (0 = wide). */
+  zoom: number;
+  /** [speed setting, sustained deg/s] pairs, ascending. */
+  pan: [number, number][];
+  tilt: [number, number][];
+}
+
+export interface CameraProfile {
+  /** Free text: model + when/how it was characterized. */
+  model: string;
+  /**
+   * Sustained drive rate for each speed setting, at several zooms (cameras
+   * that scale speed with zoom need more than one row). Settings are the
+   * protocol's speed values (VISCA bytes); the first row is the widest zoom.
+   */
+  speedSurface: SpeedRow[];
+  /** Absolute moves: speed settings used, and a slower pan setting for long
+   *  slews (some heads miss steps when flung far at full speed). */
+  absolute: {
+    panSetting: number;
+    tiltSetting: number;
+    longPanSetting: number;
+    longPanMoveDeg: number;
+  };
+  lens: {
+    /** Fastest zoom travel, lens units per second (bounds plausible readings). */
+    travelUnitsPerSec: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// TONGVEO VISCA-over-IP PTZ (20×), the first characterized camera.
+// Drive-speed step -> SUSTAINED deg/s, as a SURFACE over zoom.
+//
+// This firmware scales pan/tilt drive speed with zoom ("speed by zoom",
+// measured 2026-10-10 with scripts/probe-mech.ts + probe-speed-zoom.ts): pan
+// byte 1 is ~7°/s at full wide but ~1.4°/s from zoom ≈900 up, and every byte
+// compresses toward the ~1.47°/s floor as the lens goes tele. The June tables
+// were measured wide only, so zoomed in — exactly where smoothness matters —
+// the dither's model ran ~5× hot and the loop's integrator saturated. The
+// driver therefore interpolates a per-zoom table from the rows below (linear
+// in zoom units between measured rows, linear in step within a row).
+//
+// Row 0 (wide) keeps the full June tables (two-timed-sweep; low steps
+// re-measured by video frame-shift 2026-06-10). Speed byte 0x00 is a REAL
+// slow gear (~1.47°/s), not a no-op — "stopped" is STOP_STEP (-1).
+const PAN_SPEEDS_WIDE: [number, number][] = [
+  [0, 1.47], [1, 7.9], [2, 17.6], [3, 21.2], [4, 26.55], [5, 29.32], [6, 31.05],
+  [7, 35.57], [9, 41.5], [11, 44.59], [12, 47.26], [13, 50.06], [16, 54.15],
+  [17, 56.01], [18, 57.85], [19, 64.76], [20, 67.56], [21, 71.53],
+  [22, 74.23], [24, 75.16],
+];
+const TILT_SPEEDS_WIDE: [number, number][] = [
+  [0, 1.47], [1, 3.0], [2, 4.5], [3, 6.2], [4, 7.67], [5, 9.29], [6, 11.86],
+  [7, 13.36], [8, 13.8], [9, 16.82], [10, 17.68], [11, 20.31], [13, 23.52],
+  [15, 24.78], [16, 26.14], [17, 30.45], [19, 33.5],
+];
+
+const TONGVEO_SPEED_SURFACE: SpeedRow[] = [
+  { zoom: 0, pan: PAN_SPEEDS_WIDE, tilt: TILT_SPEEDS_WIDE },
+  // Measured 2026-10-10 (probe-speed-zoom.ts, pose two-timed sweep, zoom read
+  // back from the lens). Byte 0 is the 1.47°/s floor gear at every zoom
+  // (probe-mech.ts: 1.53 @900, 1.46 @1437). Up to ~zoom 300 nothing changes;
+  // from ~600 the firmware remaps bytes onto progressively slower native
+  // speeds, until at 1200+ bytes 1-2 sit on the floor and 3-4 on ~2.9°/s.
+  {
+    zoom: 300,
+    pan: [[0, 1.47], [1, 7.43], [2, 14.77], [3, 20.92], [4, 28.55], [6, 32.71], [8, 38.7], [12, 41.95], [18, 61.08]],
+    tilt: [[0, 1.47], [1, 3.4], [2, 4.91], [3, 5.46], [5, 9.84], [8, 12.28]],
+  },
+  {
+    zoom: 600,
+    pan: [[0, 1.47], [1, 2.78], [2, 7.48], [3, 7.79], [4, 15.63], [6, 20.83], [8, 28.24], [12, 33.6], [18, 44.41]],
+    tilt: [[0, 1.47], [1, 1.7], [2, 3.25], [3, 4.12], [5, 7.76], [8, 11.63]],
+  },
+  {
+    zoom: 900,
+    pan: [[0, 1.47], [1, 1.49], [2, 3.12], [3, 6.6], [4, 7.82], [6, 13.98], [8, 22.11], [12, 23.67], [18, 35.73]],
+    tilt: [[0, 1.47], [1, 1.7], [2, 3.26], [3, 5.13], [5, 6.51], [8, 10.12]],
+  },
+  {
+    zoom: 1200,
+    // Bytes 12-18 / tilt 10 re-measured 2026-10-10 17:55 (probe-speed-zoom.ts).
+    pan: [[0, 1.47], [1, 1.32], [2, 1.39], [3, 2.8], [4, 2.97], [6, 7.0], [8, 7.0], [12, 14.84], [16, 21.11], [18, 23.19]],
+    tilt: [[0, 1.47], [1, 1.36], [2, 1.61], [3, 2.93], [5, 3.08], [8, 4.32], [10, 6.15]],
+  },
+  // Full tele (measured 2026-10-10 15:17, probe-speed-zoom.ts): bytes 0-4
+  // are ALL the ~1.5°/s floor gear on both axes (pan 1.56/1.48/1.47/1.32/
+  // 1.41, tilt 1.61/1.55/1.44/1.71/1.43). Bytes ≥5 still carried over from
+  // the 1200 row until measured. (The earlier guess of 2.9°/s at bytes 3-4
+  // made the dither "deliver" a rate the motor never produced — the loop's
+  // integrator wound up and hunted at tele.)
+  // Second probe 15:25: bytes 5-6 are still the floor; byte 8 = 2.63 (pan) /
+  // 2.93 (tilt); byte 12 = 2.97 (pan). Byte 18 unmeasured (kept from 1200).
+  {
+    zoom: 1437,
+    // Third probe 2026-10-10 17:52 (bytes 12-18 pan, 8-20 tilt): the fast
+    // pan gear at full tele is ~7.4°/s (bytes 16-18), NOT the 22°/s carried
+    // over from the 1200 row — bytes 12-15 are all ~3°/s. Tilt tops out at
+    // ~4.6°/s (byte 20). So at tele the only gears are ~1.5 / ~3 / ~7.4°/s.
+    pan: [[0, 1.47], [6, 1.5], [8, 2.63], [12, 2.97], [14, 3.14], [16, 7.06], [18, 7.39]],
+    tilt: [[0, 1.5], [6, 1.6], [8, 2.93], [12, 3.06], [14, 3.25], [16, 4.09], [20, 4.62]],
+  },
+];
+
+export const TONGVEO_PROFILE: CameraProfile = {
+  model: "TONGVEO VISCA-over-IP 20× (speed surface 2026-06-10/2026-10-10)",
+  speedSurface: TONGVEO_SPEED_SURFACE,
+  absolute: {
+    // Absolute moves flat out (pan 0x18 / tilt 0x14, the maxima) except long
+    // pan slews: the pan pointing jumped ~+2° across a ~300° wrap
+    // (SWA2306, 2026-10-11) — the motor missing steps at full speed.
+    panSetting: 0x18,
+    tiltSetting: 0x14,
+    longPanSetting: 0x12,
+    longPanMoveDeg: 120,
+  },
+  // Zoom travel measured ~400-500 units/s in pass series (2026-10-14).
+  lens: { travelUnitsPerSec: 500 },
+};
