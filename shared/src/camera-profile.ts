@@ -33,6 +33,24 @@ export interface CameraProfile {
   lens: {
     /** Fastest zoom travel, lens units per second (bounds plausible readings). */
     travelUnitsPerSec: number;
+    /** Manual-focus behaviour (camera/focus.ts derives its thresholds from it). */
+    focus: {
+      /** Zoom bucket of the learned focus table, lens units (near tele the
+       *  zoom-tracking curve is steep, so only the exact zoom is meaningful). */
+      lutBucketUnits: number;
+      /** A known sharp point for a distant plane: [zoom, focus] (seed). */
+      farSeed: [number, number];
+      /** Depth of field at full tele, focus units. */
+      depthOfFieldUnits: number;
+      /** Focus drive speed, units/s. */
+      driveUnitsPerSec: number;
+      /** Below this zoom a far-stop focus reference is cheap and invisible. */
+      wideReferenceMaxZoom: number;
+      /** Servo the focus only within this many zoom units of the commanded zoom. */
+      servoZoomTolUnits: number;
+      /** Send zoom+focus in one command only at/above this zoom (lens-specific). */
+      directMinZoomUnits: number;
+    };
   };
   mechanical: {
     /**
@@ -231,7 +249,22 @@ export const TONGVEO_PROFILE: CameraProfile = {
     longPanMoveDeg: 120,
   },
   // Zoom travel measured ~400-500 units/s in pass series (2026-10-14).
-  lens: { travelUnitsPerSec: 500 },
+  lens: {
+    travelUnitsPerSec: 500,
+    focus: {
+      // ~37 focus units per zoom unit near tele (1385 → −1924, 1437 → −3870):
+      // a 32-unit bucket blurred a whole pass; only the exact zoom works.
+      lutBucketUnits: 4,
+      farSeed: [1437, -3870], // measured sharp −3857…−3905 (two passes + probe)
+      depthOfFieldUnits: 300,
+      driveUnitsPerSec: 90, // speed bytes above 7 are ignored (~80-100 u/s)
+      wideReferenceMaxZoom: 400,
+      servoZoomTolUnits: 120,
+      // Zoom-Focus Direct sent mid zoom-out paired a mid stop with a tele
+      // focus and wedged the lens (2026-10-12/13): tele stops only.
+      directMinZoomUnits: 1173,
+    },
+  },
   // A fast absolute move overshooting through ~90° trips the firmware's
   // auto-flip; pan then drives BACKWARDS until tilt is below ~65° (UAL433,
   // KAL024 2026-10-11). Parks hold 6° short of vertical.

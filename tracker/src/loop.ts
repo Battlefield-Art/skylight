@@ -174,9 +174,8 @@ const LADDER_LOST_MS = 6000;
 const ZOOM_ARRIVE_GRACE_MS = 1500;
 /** Learn the vision bias only while the aim moves slower than this, deg/s. */
 const BIAS_MAX_AIM_RATE_DPS = 3;
-/** Zoom-Focus Direct only at/above this zoom (the tele stops)... */
-const ZOOM_FOCUS_MIN_UNITS = 1173;
-/** ...and only for a focus learned from at least this many sharp frames. */
+/** Zoom-Focus Direct only at/above the lens's directMinZoomUnits, and only
+ *  for a focus learned from at least this many sharp frames. */
 const ZOOM_FOCUS_MIN_SAMPLES = 20;
 /** A plane dropped for a challenger can't win the camera back for this long. */
 const TARGET_COOLDOWN_MS = 45_000;
@@ -292,7 +291,8 @@ export class ControlLoop {
   /** Continuous auto-calibration from locked passes. */
   private autoCal = new AutoCalibrator(AUTOCAL_FILE);
   private landmarks = new LandmarkStore(LANDMARK_FILE);
-  private focus = new FocusController(FOCUS_LUT_FILE);
+  /** Built in the constructor: needs the lens description from the config. */
+  private focus!: FocusController;
   private lmRunning = false;
   private lmAbort = false;
   private lmNextAt = Date.now() + LM_FIRST_DELAY_MS;
@@ -426,7 +426,9 @@ export class ControlLoop {
       lastUploadedId: null,
       lastError: null,
     }),
-  ) {}
+  ) {
+    this.focus = new FocusController(this.cfg().camera.lens.focus, FOCUS_LUT_FILE);
+  }
 
   /** Subscribe to pass events (target changes, zenith/wrap regimes, focus). */
   onEvent(cb: (e: LoopEvent) => void): () => void {
@@ -630,7 +632,7 @@ export class ControlLoop {
     // Elsewhere tracking preserves the current focus DISTANCE, which is right
     // for the plane already in focus; forcing a table value there defocused a
     // close plane instantly (see FocusController.trusted).
-    const f = d.setZoomFocus && zoomUnits >= ZOOM_FOCUS_MIN_UNITS
+    const f = d.setZoomFocus && zoomUnits >= this.cfg().camera.lens.focus.directMinZoomUnits
       ? this.focus.trusted(zoomUnits, distanceBand(slantM), ZOOM_FOCUS_MIN_SAMPLES)
       : null;
     if (f != null) d.setZoomFocus!(zoomUnits, f);
@@ -1487,7 +1489,7 @@ export class ControlLoop {
         else if (a.kind === "nudge") {
           // Jump straight there only onto a trusted tele point; anything else
           // stays a timed drive the sharpness feedback can catch mid-way.
-          const trusted = lensZoom >= ZOOM_FOCUS_MIN_UNITS
+          const trusted = lensZoom >= cfg.camera.lens.focus.directMinZoomUnits
             ? this.focus.trusted(lensZoom, distanceBand(prediction?.azEl.slantM ?? null), ZOOM_FOCUS_MIN_SAMPLES)
             : null;
           const direct = d.setFocusDirect && trusted != null && Math.abs(trusted - a.target) < 5 && d.setFocusDirect(a.target);
