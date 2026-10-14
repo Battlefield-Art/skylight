@@ -37,8 +37,16 @@ from the mount model.
 `tracker/scripts/` probes, run with the tracker stopped:
 - `onvif-ptz.ts info` — what an ONVIF camera says it supports.
 - `probe-onvif-speed.ts` — rate delivered per ONVIF velocity at chosen zooms.
-- `probe-speed-zoom.ts` — VISCA speed surface (to fold into one
-  `characterize-camera.ts` that writes the profile JSON).
+- `characterize-camera.ts` — VISCA speed surface at the configured zoom
+  stops + zoom travel rate → a config patch for `tracker.camera` (merges into
+  the current profile; park tilt, detents and focus are kept). ~40 s per
+  (zoom, setting); pick subsets with ZOOMS / PAN / TILT.
+- `print-camera-profile.ts` — a built-in preset as a config patch.
+- (`probe-speed-zoom.ts` — the older single-purpose surface probe.)
+
+Findings on the TONGVEO (2026-10-14): ONVIF ContinuousMove maps onto the same
+discrete gears as VISCA (no finer or slower speeds); the speed remap with
+zoom is stepwise, so measure at the zoom stops rather than interpolate.
 
 ## Offline twin
 
@@ -60,8 +68,11 @@ level and 27° mounts). Test control changes here first.
    the crossing no-lead rule removed (no effect in the twin once the
    feedforward was fixed). Setpoint trackers run in head axes.
 4. ✅ `predict.aimLeadSec` learned from vision (along-track timing → fold).
-5. ⏳ Measure the speed surface at the actual zoom stops (interpolated now).
-6. ⏳ Focus: lens-unit constants in camera/focus.ts and loop.ts
-   (ZOOM_FOCUS_MIN_UNITS, TELE_SEED, servo/one-push thresholds) → profile.
-7. ⏳ ZENITH_PRE_SEC from the absolute-move speed; SFO_ARP from site config.
-8. ⏳ One `characterize-camera.ts` producing the whole profile.
+5. ✅ Speed surface measured at stops 1260 and 1385 (others interpolated;
+   `characterize-camera.ts` covers all stops in a longer run).
+6. ✅ Focus: profile.lens.focus; thresholds derived from depth of field and
+   drive speed.
+7. ✅ Park lead time from the absolute-move speed; airport from config.
+8. ✅ `characterize-camera.ts` (speed surface + zoom travel). Not yet
+   automated: park tilt (auto-flip), tilt detents, focus depth of field /
+   drive speed, command latency (the aim lead is learned instead).
