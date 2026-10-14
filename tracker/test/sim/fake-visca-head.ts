@@ -20,6 +20,10 @@ export interface HeadOptions {
   tiltLatencySec: number;
   /** Age of the pose an inquiry reports, s. */
   poseLagSec: number;
+  /** Silently drop the n-th zoom position command (1-based) — the live
+   *  camera ACKs and "completes" every command but now and then never
+   *  executes a zoom (2026-10-14). */
+  dropZoom?: (n: number) => boolean;
 }
 
 interface Internals {
@@ -50,6 +54,13 @@ export class FakeViscaHead {
   private tiltRate = 0;
   private absGoal: { panDeg: number; tiltDeg: number; panDps: number; tiltDps: number } | null = null;
   private zoomGoal = 0;
+  /** Zoom position commands received (executed or dropped). */
+  zoomCmds = 0;
+  /** Last zoom position the driver sent (executed or dropped). */
+  zoomAsked = 0;
+  /** Longest stretch the lens sat idle away from the last zoom asked for, s. */
+  zoomIdleOffMaxSec = 0;
+  private zoomIdleOffSince: number | null = null;
   private queue: { at: number; apply: () => void }[] = [];
   private history: { t: number; panDeg: number; tiltDeg: number; zoom: number }[] = [];
   readonly driver: ViscaCamera;
@@ -101,6 +112,8 @@ export class FakeViscaHead {
     } else if (p[1] === 0x01 && p[2] === 0x04 && p[3] === 0x47) {
       // Zoom direct (and zoom-focus direct: first 4 nibbles)
       const z = nib(p.slice(4, 8));
+      this.zoomAsked = z;
+      if (this.opts.dropZoom?.(++this.zoomCmds)) return;
       this.later(0.1, () => { this.zoomGoal = z; });
     }
   }
@@ -148,7 +161,14 @@ export class FakeViscaHead {
       this.tiltDeg += this.tiltRate * dt;
     }
     const zv = this.profile.lens.travelUnitsPerSec * dt;
+    const zoomWas = this.zoom;
     this.zoom = Math.abs(this.zoomGoal - this.zoom) <= zv ? this.zoomGoal : this.zoom + Math.sign(this.zoomGoal - this.zoom) * zv;
+    if (this.zoom === zoomWas && Math.abs(this.zoom - this.zoomAsked) > 15) {
+      this.zoomIdleOffSince ??= now;
+      this.zoomIdleOffMaxSec = Math.max(this.zoomIdleOffMaxSec, (now - this.zoomIdleOffSince) / 1000);
+    } else {
+      this.zoomIdleOffSince = null;
+    }
     this.history.push({ t: now, panDeg: this.panDeg, tiltDeg: this.tiltDeg, zoom: this.zoom });
     if (this.history.length > 400) this.history.shift();
   }

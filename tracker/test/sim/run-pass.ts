@@ -50,6 +50,10 @@ export interface PassMetrics {
   events: string[];
   /** Median along-track offset of the plane from the camera axis, s (+ = ahead). */
   alongSec: number;
+  /** Zoom commands sent, and the longest the lens sat idle away from the
+   *  last one, s (see HeadOptions.dropZoom). */
+  zoomCommands: number;
+  zoomIdleOffMaxSec: number;
 }
 
 export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
@@ -156,6 +160,7 @@ export async function runPass(
     if (err < hfov / 2 * 0.9) inFrame++;
   }
   loop.stop();
+  const zoomCmds = sim.zoomCmds;
   sim.driver.stop();
   vi.unstubAllEnvs();
   const q = (a: number[], p: number) => {
@@ -171,6 +176,8 @@ export async function runPass(
     errFrameP95: q(frac, 0.95),
     events,
     alongSec: q(along, 0.5),
+    zoomCommands: zoomCmds,
+    zoomIdleOffMaxSec: sim.zoomIdleOffMaxSec,
   };
 }
 

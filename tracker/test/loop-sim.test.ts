@@ -2,7 +2,7 @@
 // the camera profile (test/sim). Pointing accuracy on a close overhead pass,
 // on the tilted mount the camera actually sits on and on a level one.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { baseTracker, runPass, type Flight } from "./sim/run-pass.js";
+import { DEFAULT_HEAD, baseTracker, runPass, type Flight } from "./sim/run-pass.js";
 
 // UAL875 (2026-10-14): 777 departure heading 297° at 191 kt, climbing
 // 2300 ft/min, closest 384 m (350 m up, 158 m away toward az 23), peak 80°.
@@ -41,5 +41,22 @@ describe("loop simulation", () => {
         expect(m.inFrame).toBeGreaterThan(lean > 0 ? 0.97 : 0.9);
       }, 60_000);
     }
+  }
+});
+
+// The live camera ACKs every zoom command but now and then never executes one
+// (2026-10-14: ~1% of zoom commands, more during focus drives; UAL817 sat 4.6 s
+// at tele after a target change). Here the head drops every 4th zoom command:
+// the lens must still never sit idle away from the zoom asked for longer than
+// the driver's resend window (it used to wait for the loop to want another zoom).
+describe("loop simulation: dropped zoom commands", () => {
+  for (const [name, flight] of [["routine", ROUTINE], ["overhead", OVERHEAD]] as const) {
+    it(`${name} pass, every 4th zoom command dropped`, async () => {
+      const t = baseTracker();
+      const m = await runPass(t, flight, { ...DEFAULT_HEAD, dropZoom: (n) => n % 4 === 0 });
+      console.log(`${name} dropped zoom: ${JSON.stringify(m)}`);
+      expect(m.zoomCommands).toBeGreaterThanOrEqual(4); // something was dropped
+      expect(m.zoomIdleOffMaxSec).toBeLessThan(2.5);
+    }, 60_000);
   }
 });

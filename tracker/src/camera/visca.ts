@@ -443,6 +443,7 @@ export class ViscaCamera implements CameraDriver {
     this.noteZoomCommand(z);
     this.lastSentFocus = null; // zoom tracking moves the focus
     this.sendCommand([0x81, 0x01, 0x04, 0x47, ...nibbles(z, 4), 0xff]);
+    this.zoomSent(z);
   }
 
   private lastSentFocus: number | null = null;
@@ -492,6 +493,7 @@ export class ViscaCamera implements CameraDriver {
     this.sweptSinceFocus = false;
     // Focus is signed 16-bit on this lens; nibbles() masks to 0xffff.
     this.sendCommand([0x81, 0x01, 0x04, 0x47, ...nibbles(z, 4), ...nibbles(f, 4), 0xff]);
+    this.zoomSent(z);
   }
 
   /** Re-send an unchanged direct focus after this long (it lands in ~2-3 s). */
@@ -622,6 +624,7 @@ export class ViscaCamera implements CameraDriver {
     const zs = Math.min(7, Math.round(Math.abs(zoom) * 7));
     const zoomByte = zoom > 0.05 ? 0x20 | zs : zoom < -0.05 ? 0x30 | zs : 0x00;
     this.sendCommand([0x81, 0x01, 0x04, 0x07, zoomByte, 0xff]);
+    this.zoomGoalVoid();
   }
 
   stopMotion(): void {
@@ -633,6 +636,7 @@ export class ViscaCamera implements CameraDriver {
     this.cmdTiltDps = 0;
     this.sendCommand([0x81, 0x01, 0x06, 0x01, 0x01, 0x01, 0x03, 0x03, 0xff]);
     this.sendCommand([0x81, 0x01, 0x04, 0x07, 0x00, 0xff]);
+    this.zoomGoalVoid();
   }
 
   getPose(): CameraPose | null {
@@ -764,6 +768,7 @@ export class ViscaCamera implements CameraDriver {
       this.lastSentZoom = w.zoomUnits;
       this.lastSentFocus = null; // zoom tracking moves the focus
       this.noteZoomCommand(w.zoomUnits);
+      this.zoomSent(w.zoomUnits);
     }
   }
 
@@ -860,6 +865,61 @@ export class ViscaCamera implements CameraDriver {
    *  reboot / power-cycle clears it). */
   private static readonly LENS_STUCK_MS = 10_000;
   private static readonly LENS_STUCK_UNITS = 40;
+
+  /**
+   * Zoom delivery is closed-loop. The camera now and then drops a Zoom
+   * Direct without a trace (2026-10-14: 1% of zoom commands, 6% of those
+   * sent during a timed focus drive), and every send path dedupes on the
+   * last zoom SENT — so a dropped command was never repeated: the lens sat
+   * at the old zoom until the loop happened to want a different one (UAL817:
+   * 4.6 s at tele after a target change, no lock; one mid-pass zoom was
+   * ignored 27 s). The commanded zoom is the goal until a lens reading
+   * arrives at it; while readings show no progress toward it for
+   * ZOOM_RESEND_MS (doubling per unanswered resend), it is sent again.
+   */
+  private zoomDelivery: { goal: number; best: number; progressAt: number; resends: number } | null = null;
+  /** Lens reading this close to the goal = arrived (zoom units). */
+  private static readonly ZOOM_ARRIVE_UNITS = 15;
+  /** No progress toward the goal for this long after a send → resend, ms. */
+  private static readonly ZOOM_RESEND_MS = 1500;
+
+  /** A zoom position went out (any command that carries one). */
+  private zoomSent(z: number): void {
+    const d = this.zoomDelivery;
+    const resends = d && Math.abs(d.goal - z) <= 8 ? d.resends : 0;
+    this.zoomDelivery = { goal: z, best: Infinity, progressAt: Date.now(), resends };
+  }
+
+  /** A zoom drive or stop (jog, stopMotion) leaves the lens wherever it
+   *  halts: there is no goal to deliver, and the next zoom position must
+   *  go out even if it equals the last one sent. */
+  private zoomGoalVoid(): void {
+    this.zoomDelivery = null;
+    this.lastSentZoom = null;
+  }
+
+  private checkZoomDelivery(zoom: number): void {
+    const d = this.zoomDelivery;
+    if (!d) return;
+    const now = Date.now();
+    const dist = Math.abs(zoom - d.goal);
+    if (dist <= ViscaCamera.ZOOM_ARRIVE_UNITS) {
+      this.zoomDelivery = null;
+      return;
+    }
+    if (dist < d.best - 2) {
+      d.best = dist;
+      d.progressAt = now;
+      return;
+    }
+    if (now - d.progressAt < ViscaCamera.ZOOM_RESEND_MS * 2 ** Math.min(3, d.resends)) return;
+    d.resends++;
+    d.best = Infinity;
+    d.progressAt = now;
+    this.lastSentFocus = null; // zoom tracking moves the focus
+    console.log(`[visca] zoom ${d.goal} not taken up (lens at ${zoom}) — resent (#${d.resends})`);
+    this.sendCommand([0x81, 0x01, 0x04, 0x47, ...nibbles(d.goal, 4), 0xff]);
+  }
 
   private noteZoomCommand(z: number): void {
     const st = this.zoomReadStill;
@@ -979,6 +1039,7 @@ export class ViscaCamera implements CameraDriver {
         if (this.isZoomJump(v)) return;
         const zoom = v;
         this.noteZoomReading(zoom);
+        this.checkZoomDelivery(zoom);
         this.lastInquiryReply = Date.now();
         this.pose = {
           panDeg: this.pose?.panDeg ?? 0,
