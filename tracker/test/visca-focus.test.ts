@@ -136,22 +136,33 @@ describe("zoom readings", () => {
     expect(c.pose?.zoomUnits).toBe(1001);
   });
 
-  it("holds an impossible zoom jump until the next reading confirms it (2026-10-14 1085→113→1173)", () => {
-    const { c } = makeCam();
+  it("drops zoom readings the lens can't be at (2026-10-14 1085→113→1173)", () => {
+    const { cam, c } = makeCam();
     reply7(c, "zoom", 1085);
+    cam.setZoom(1173);
     vi.advanceTimersByTime(200);
-    reply7(c, "zoom", 113); // a late answer the focus echo check can't match
+    reply7(c, "zoom", 113); // not where the lens is
     expect(c.pose?.zoomUnits).toBe(1085);
     vi.advanceTimersByTime(200);
     reply7(c, "zoom", 1173);
     expect(c.pose?.zoomUnits).toBe(1173);
-    // a real big move (lens snapped wide) reads through on the second answer
+    // two in a row (1143 → 107 → 115 → …) are still dropped
+    for (const v of [107, 115]) {
+      vi.advanceTimersByTime(200);
+      reply7(c, "zoom", v);
+      expect(c.pose?.zoomUnits).toBe(1173);
+    }
+    // a commanded zoom-out reads through at once
+    cam.setZoom(0);
     vi.advanceTimersByTime(200);
-    reply7(c, "zoom", 0);
-    expect(c.pose?.zoomUnits).toBe(1173);
-    vi.advanceTimersByTime(200);
-    reply7(c, "zoom", 0);
-    expect(c.pose?.zoomUnits).toBe(0);
+    reply7(c, "zoom", 900);
+    expect(c.pose?.zoomUnits).toBe(900);
+    // an uncommanded jump is believed on the third consistent reading
+    for (const [v, want] of [[1400, 900], [1400, 900], [1400, 1400]] as const) {
+      vi.advanceTimersByTime(200);
+      reply7(c, "zoom", v);
+      expect(c.pose?.zoomUnits).toBe(want);
+    }
   });
 
   it("flags a lens that ignores zoom commands (2026-10-12 21:56Z wedge)", () => {

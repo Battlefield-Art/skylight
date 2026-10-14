@@ -952,33 +952,38 @@ export class ViscaCamera implements CameraDriver {
   }
 
   /**
-   * A zoom reading further from the last one than the lens can travel between
-   * two inquiries (~500 units/s) is held until the next reading confirms it.
-   * Focus answers that arrive after their 300 ms window land on the next zoom
-   * question with a value isFocusEcho can't match (the focus moved since):
-   * 2026-10-14, 11 single readings like 1085 → 113 → 1173 in 20 passes. Each
-   * one told vision the frame was ~52° wide instead of ~8° for a frame or
-   * two (×6 corrections, a dropped lock) and restarted the lens-settle clock.
+   * The lens only travels toward the zoom it was sent (~500 units/s), so a
+   * reading outside [last reading … commanded] plus the travel possible since
+   * is not where the lens is. 2026-10-14: 11 such readings in 20 passes
+   * (1085 → 113 → 1173; values 32-300, mostly 104-120, at lens 850-1330 —
+   * not the focus position, so isFocusEcho misses them; sometimes two in a
+   * row). Each one told vision the frame was ~52° wide instead of ~8° for a
+   * few frames (×6 corrections, a dropped lock) and restarted the
+   * lens-settle clock. Accepted only after 3 consistent readings in a row.
    */
-  private zoomJumpCandidate: number | null = null;
+  private zoomOddReads: number[] = [];
   private lastZoomReadAt = 0;
   private isZoomJump(v: number): boolean {
     const cur = this.pose?.zoomUnits;
     const now = Date.now();
     const dt = now - this.lastZoomReadAt;
-    if (cur == null || dt > 1500 || Math.abs(v - cur) <= 200 + 0.6 * dt) {
-      this.zoomJumpCandidate = null;
-      this.lastZoomReadAt = now;
-      return false;
+    const cmd = this.lastSentZoom ?? cur;
+    const slack = 100 + 0.6 * dt;
+    const ok =
+      cur == null || cmd == null || dt > 1500 ||
+      (v >= Math.min(cur, cmd) - slack && v <= Math.max(cur, cmd) + slack);
+    const odd = this.zoomOddReads;
+    if (!ok && (odd.length === 0 || Math.abs(v - odd[odd.length - 1]) <= 120) && odd.length < 2) {
+      odd.push(v);
+      return true;
     }
-    const cand = this.zoomJumpCandidate;
-    if (cand != null && Math.abs(v - cand) <= 120) {
-      this.zoomJumpCandidate = null;
-      this.lastZoomReadAt = now;
-      return false;
+    if (!ok && odd.length > 0 && Math.abs(v - odd[odd.length - 1]) > 120) {
+      this.zoomOddReads = [v];
+      return true;
     }
-    this.zoomJumpCandidate = v;
-    return true;
+    this.zoomOddReads = [];
+    this.lastZoomReadAt = now;
+    return false;
   }
 
   /** Lens stuck: zoom commands keep asking for another zoom, the camera keeps
