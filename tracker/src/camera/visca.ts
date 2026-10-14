@@ -962,16 +962,23 @@ export class ViscaCamera implements CameraDriver {
    * lens-settle clock. Accepted only after 3 consistent readings in a row.
    */
   private zoomOddReads: number[] = [];
+  private zoomOddAt = 0;
   private lastZoomReadAt = 0;
   private isZoomJump(v: number): boolean {
     const cur = this.pose?.zoomUnits;
     const now = Date.now();
     const dt = now - this.lastZoomReadAt;
     const cmd = this.lastSentZoom ?? cur;
-    const slack = 100 + 0.6 * dt;
+    // Travel slack capped: after a reply stall (seen: 1.5 s+) the lens is
+    // still somewhere between where it was and where it was sent.
+    const slack = 100 + 0.6 * Math.min(dt, 500);
     const ok =
-      cur == null || cmd == null || dt > 1500 ||
+      cur == null || cmd == null ||
       (v >= Math.min(cur, cmd) - slack && v <= Math.max(cur, cmd) + slack);
+    // A streak is consecutive answers (~200-400 ms apart); stray bad values
+    // seconds apart cluster at 104-137 and must not add up to one.
+    if (now - this.zoomOddAt > 800) this.zoomOddReads = [];
+    if (!ok) this.zoomOddAt = now;
     const odd = this.zoomOddReads;
     if (!ok && (odd.length === 0 || Math.abs(v - odd[odd.length - 1]) <= 120) && odd.length < 2) {
       odd.push(v);

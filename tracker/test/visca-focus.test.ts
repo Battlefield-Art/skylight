@@ -152,6 +152,10 @@ describe("zoom readings", () => {
       reply7(c, "zoom", v);
       expect(c.pose?.zoomUnits).toBe(1173);
     }
+    // ...also after a long reply stall (1255 → 137 after 1.6 s without a zoom answer)
+    vi.advanceTimersByTime(1600);
+    reply7(c, "zoom", 137);
+    expect(c.pose?.zoomUnits).toBe(1173);
     // a commanded zoom-out reads through at once
     cam.setZoom(0);
     vi.advanceTimersByTime(200);
