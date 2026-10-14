@@ -951,6 +951,36 @@ export class ViscaCamera implements CameraDriver {
     return Math.abs(v - f.units) <= 2 && Math.abs(v - cur) > 100;
   }
 
+  /**
+   * A zoom reading further from the last one than the lens can travel between
+   * two inquiries (~500 units/s) is held until the next reading confirms it.
+   * Focus answers that arrive after their 300 ms window land on the next zoom
+   * question with a value isFocusEcho can't match (the focus moved since):
+   * 2026-10-14, 11 single readings like 1085 → 113 → 1173 in 20 passes. Each
+   * one told vision the frame was ~52° wide instead of ~8° for a frame or
+   * two (×6 corrections, a dropped lock) and restarted the lens-settle clock.
+   */
+  private zoomJumpCandidate: number | null = null;
+  private lastZoomReadAt = 0;
+  private isZoomJump(v: number): boolean {
+    const cur = this.pose?.zoomUnits;
+    const now = Date.now();
+    const dt = now - this.lastZoomReadAt;
+    if (cur == null || dt > 1500 || Math.abs(v - cur) <= 200 + 0.6 * dt) {
+      this.zoomJumpCandidate = null;
+      this.lastZoomReadAt = now;
+      return false;
+    }
+    const cand = this.zoomJumpCandidate;
+    if (cand != null && Math.abs(v - cand) <= 120) {
+      this.zoomJumpCandidate = null;
+      this.lastZoomReadAt = now;
+      return false;
+    }
+    this.zoomJumpCandidate = v;
+    return true;
+  }
+
   /** Lens stuck: zoom commands keep asking for another zoom, the camera keeps
    *  answering the same one (2026-10-12 21:56Z: zoom 976 / focus 184 from
    *  then on, through a tracker restart — pan/tilt fine; only a camera
@@ -1073,6 +1103,7 @@ export class ViscaCamera implements CameraDriver {
         const zoomMax = Math.max(this.o.units.zoomWideUnits, this.o.units.zoomTeleUnits);
         if (v < 0 || v > zoomMax + 64) return; // not a zoom reading
         if (this.isFocusEcho(v)) return;
+        if (this.isZoomJump(v)) return;
         const zoom = v;
         this.noteZoomReading(zoom);
         this.lastInquiryReply = Date.now();

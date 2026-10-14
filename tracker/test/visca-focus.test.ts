@@ -136,6 +136,24 @@ describe("zoom readings", () => {
     expect(c.pose?.zoomUnits).toBe(1001);
   });
 
+  it("holds an impossible zoom jump until the next reading confirms it (2026-10-14 1085→113→1173)", () => {
+    const { c } = makeCam();
+    reply7(c, "zoom", 1085);
+    vi.advanceTimersByTime(200);
+    reply7(c, "zoom", 113); // a late answer the focus echo check can't match
+    expect(c.pose?.zoomUnits).toBe(1085);
+    vi.advanceTimersByTime(200);
+    reply7(c, "zoom", 1173);
+    expect(c.pose?.zoomUnits).toBe(1173);
+    // a real big move (lens snapped wide) reads through on the second answer
+    vi.advanceTimersByTime(200);
+    reply7(c, "zoom", 0);
+    expect(c.pose?.zoomUnits).toBe(1173);
+    vi.advanceTimersByTime(200);
+    reply7(c, "zoom", 0);
+    expect(c.pose?.zoomUnits).toBe(0);
+  });
+
   it("flags a lens that ignores zoom commands (2026-10-12 21:56Z wedge)", () => {
     const { cam, c } = makeCam();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

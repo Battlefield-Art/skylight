@@ -83,6 +83,31 @@ describe("planPass", () => {
     expect(Math.abs(norm180(plan!.holdAzEl.azDeg - plan!.caAzDeg))).toBeLessThan(1);
   });
 
+  it("holds a steady park point while the pass is re-planned every tick", () => {
+    // EJM450 2026-10-14 (397 m slant, ~27°/s): the closest-approach azimuth
+    // came off the 0.5 s grid, so it hopped ±6° between 100 ms re-plans;
+    // every hop over HOLD_RETARGET_DEG re-issued the absolute move, the head
+    // sat still for 1.2 s, then whipped 70° after the plane had gone by.
+    const cosLat = Math.cos((SITE.lat * Math.PI) / 180);
+    const start = { lat: SITE.lat - 0.02, lon: SITE.lon + 200 / (111320 * cosLat), altM: 400 };
+    const fix = (tSec: number): Aircraft => {
+      const p = predictGeo({ ...start, gsKt: 200, trackDeg: 0 }, tSec);
+      return {
+        hex: "low", typeCode: "GLF4", lat: p.lat, lon: p.lon, altGeom: p.altM / FT_TO_M,
+        gs: 200, track: 0, baroRate: 0, ts: tSec * 1000, seen: 0,
+      };
+    };
+    const holds: { azDeg: number; elDeg: number }[] = [];
+    for (let t = 18; t < 23; t += 0.1) {
+      const plan = planPass(fix(t), SITE, t * 1000);
+      if (plan && plan.tCaSec > 0 && plan.tCaSec <= ZENITH_PRE_SEC) holds.push(plan.holdAzEl);
+    }
+    expect(holds.length).toBeGreaterThan(20);
+    const azs = holds.map((h) => h.azDeg);
+    const spread = Math.max(...azs.map((a) => Math.abs(norm180(a - azs[0]))));
+    expect(spread).toBeLessThan(1);
+  });
+
   it("does NOT flag a moderate pass", () => {
     // Same flight, but offset 3 km east: peaks well below the zenith.
     const ac = overheadFix(60);

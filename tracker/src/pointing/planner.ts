@@ -182,6 +182,30 @@ export function planPass(
     }
     prev = p;
   }
+  // Closest approach between the grid steps: a fast pass's azimuth moves
+  // ~13° per 0.5 s step there, so the grid peak hopped ±6° between 100 ms
+  // re-plans — and the park chased it (EJM450 2026-10-14: the head sat still
+  // for 1.2 s under re-issued absolute moves, then whipped 70° after the
+  // plane had gone by). Golden-section search on the head-frame elevation.
+  if (elMax > 5) {
+    const elAt = (t: number) => head(azElFromSite(site, predictGeo(kin, fixAgeSec + t)));
+    const g = (Math.sqrt(5) - 1) / 2;
+    let a = Math.max(0, tCa - stepSec);
+    let b = Math.min(horizonSec, tCa + stepSec);
+    for (let i = 0; i < 24; i++) {
+      const c = b - g * (b - a);
+      const d = a + g * (b - a);
+      if (elAt(c).elDeg >= elAt(d).elDeg) b = d;
+      else a = c;
+    }
+    const tPeak = (a + b) / 2;
+    const peak = elAt(tPeak);
+    if (peak.elDeg >= elMax) {
+      elMax = peak.elDeg;
+      tCa = tPeak;
+      caAz = peak.azDeg;
+    }
+  }
 
   return {
     zenithPass: elMax >= ZENITH_PASS_EL || azRateMax >= ZENITH_PAN_RATE_DPS,
