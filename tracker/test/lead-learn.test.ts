@@ -19,23 +19,21 @@ describe("LeadLearner", () => {
   const pass = (l: LeadLearner, sec: number, n = 30) => {
     for (let i = 0; i < n; i++) l.push(sec + (i % 3 - 1) * 0.05);
   };
-  it("folds half the agreed error after three passes", () => {
+  it("folds 30% of the agreed error after five passes", () => {
     const l = new LeadLearner();
-    pass(l, -0.6); expect(l.endPass(0, 0.6)).toBeNull();
-    pass(l, -0.5); expect(l.endPass(1, 0.6)).toBeNull();
-    pass(l, -0.55);
-    const r = l.endPass(2, 0.6)!;
+    const errs = [-0.6, -0.5, -0.55, -0.45, -0.65];
+    errs.slice(0, 4).forEach((e, i) => { pass(l, e); expect(l.endPass(i, 0.6)).toBeNull(); });
+    pass(l, errs[4]);
+    const r = l.endPass(4, 0.6)!;
     expect(r.medianSec).toBeCloseTo(-0.55, 2);
-    expect(r.leadSec).toBeCloseTo(0.6 - 0.275, 2);
+    expect(r.leadSec).toBeCloseTo(0.6 - 0.3 * 0.55, 2);
   });
   it("does nothing when passes disagree, are small, or too short", () => {
     const l = new LeadLearner();
-    pass(l, 0.4); l.endPass(0, 0.3);
-    pass(l, -0.4); l.endPass(1, 0.3);
-    pass(l, 0.4); expect(l.endPass(2, 0.3)).toBeNull();
+    [0.4, -0.4, 0.4, -0.4, 0.4].forEach((e, i) => { pass(l, e); expect(l.endPass(i, 0.3)).toBeNull(); });
     const s = new LeadLearner();
-    for (const t of [0, 1, 2]) { pass(s, 0.03); expect(s.endPass(t, 0.3)).toBeNull(); }
+    for (const t of [0, 1, 2, 3, 4]) { pass(s, 0.05); expect(s.endPass(t, 0.3)).toBeNull(); }
     const short = new LeadLearner();
-    for (const t of [0, 1, 2]) { pass(short, 0.5, 5); expect(short.endPass(t, 0.3)).toBeNull(); }
+    for (const t of [0, 1, 2, 3, 4]) { pass(short, 0.5, 5); expect(short.endPass(t, 0.3)).toBeNull(); }
   });
 });

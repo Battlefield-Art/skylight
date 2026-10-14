@@ -5,7 +5,7 @@
 // aim, projected on its direction of motion and divided by its speed, is a
 // timing error in seconds (+ = the plane is ahead: aim later than it should
 // be → lead more). Per pass, the median of those samples; when the last few
-// passes agree, fold half of it into the lead — the same damped pattern as
+// passes agree, fold part of it into the lead — the same damped pattern as
 // the mount-bias fold.
 
 /** Along-track timing error, s (+ = the plane is ahead of the aim), or null
@@ -36,12 +36,14 @@ export interface LeadFoldRules {
   maxLeadSec: number;
 }
 
+// Per-pass timing medians scatter ±0.4 s (2026-10-14: 3 passes said +0.37 s,
+// the next 3 −0.38 s, 14 min apart) — so 5 agreeing passes, 30% folds.
 export const LEAD_FOLD: LeadFoldRules = {
   minSamples: 20,
-  passes: 3,
-  minSec: 0.08,
-  maxSpreadSec: 0.4,
-  gain: 0.5,
+  passes: 5,
+  minSec: 0.12,
+  maxSpreadSec: 0.5,
+  gain: 0.3,
   minLeadSec: -0.5,
   maxLeadSec: 1.5,
 };

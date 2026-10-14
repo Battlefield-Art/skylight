@@ -159,7 +159,7 @@ export interface TrackerConfig {
     aimLeadSec: number;
     /**
      * Learn aimLeadSec from vision: per pass, the plane's along-track
-     * offset from the ADS-B aim (s); when 3 passes agree, half of it is
+     * offset from the ADS-B aim (s); when 5 passes agree, 30% of it is
      * folded in (tracker/src/pointing/leadLearn.ts). Any camera / feed.
      */
     learnAimLead: boolean;

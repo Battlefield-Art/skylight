@@ -2061,6 +2061,21 @@ export class ControlLoop {
       const e = frameGeom(atPre, cfg.mount, atPre.hfov).toFrame(p.azDeg, p.elDeg);
       exX = clamp01(e.cx);
       exY = clamp01(e.cy);
+    } else if (atPre) {
+      // Where the plane IS in this frame: its ADS-B direction at frame time,
+      // advanced by the learned aim lead (the feed's delay, see leadLearn),
+      // plus the current vision correction — through the pose the camera had
+      // when the frame was taken. (This used to be the AIM-AHEAD prediction,
+      // ~1-1.2 s in the future, through the current pose: 0.3 of a 5° frame
+      // ahead of the plane at 2°/s, outside the silhouette search radius —
+      // most "nothing near the expected spot" misses at tele, 2026-10-14.)
+      const lead = cfg.predict.aimLeadSec ?? 0;
+      const e = frameGeom(atPre, cfg.mount, atPre.hfov).toFrame(
+        atPre.truthAz + atPre.rateAzDps * lead + this.corrAzApp,
+        atPre.truthEl + atPre.rateElDps * lead + this.corrElApp,
+      );
+      exX = clamp01(e.cx);
+      exY = clamp01(e.cy);
     } else if (predicted) {
       const e = geomNow.toFrame(predicted.azDeg, predicted.elDeg);
       exX = clamp01(e.cx);
@@ -2219,10 +2234,13 @@ export class ControlLoop {
         Math.max(0.4, hfovF * 0.07) +
         (Number.isFinite(aimRateDps) ? 0.18 * Math.min(20, aimRateDps) : 1.5);
       this.tracks.update(obs, frameT, gateDeg);
+      // The ADS-B plane at FRAME time (+ the learned feed delay), not the
+      // aim-ahead point ~1 s further along (see the expected spot above).
+      const leadSel = cfg.predict.aimLeadSec ?? 0;
       const sel = this.tracks.select(
         {
-          azDeg: atFrame.predAz,
-          elDeg: atFrame.predEl,
+          azDeg: atFrame.truthAz + atFrame.rateAzDps * leadSel,
+          elDeg: atFrame.truthEl + atFrame.rateElDps * leadSel,
           azRateDps: atFrame.rateAzDps,
           elRateDps: atFrame.rateElDps,
         },
