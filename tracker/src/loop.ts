@@ -121,6 +121,9 @@ const SWEEP_FLOOR_ERR_DEG = 1.0;
 const HOLD_RETARGET_DEG = 4;
 /** Per-tick EMA gain for the ripple's slow mean (τ ≈ 1.3 s at 15 Hz). */
 const RIPPLE_LP_K = 0.05;
+/** Longest tick period integrated as elapsed time, s (a stall beyond this
+ *  is not dead-reckoned through in one step). */
+const TICK_DT_MAX_S = 0.5;
 /** Correction glide time constant, s (first-order approach to the bias). */
 const CORR_TAU_S = 0.6;
 /** Commanded-rate jerk limit: deg/s² per degree of HFOV, with a floor. */
@@ -253,6 +256,8 @@ export class ControlLoop {
   private driverOptsKey: string | null = null;
   /** Last commanded velocity rates (direction-flip hysteresis + accel cap). */
   private lastPanRateCmd = 0;
+  /** When the previous tick ran (real tick period, see tick()). */
+  private lastTickAt = 0;
   private lastTiltRateCmd = 0;
   /** Low-passed pose error for the velocity P term (pose-snap spike damping). */
   private errPanLP = 0;
@@ -916,6 +921,16 @@ export class ControlLoop {
   private tick(): void {
     const now = Date.now();
     const cfg = this.cfg();
+    // Real time since the previous tick. The loop is scheduled at commandHz
+    // but runs at ~7-8 Hz while tracking (vision load, 2026-10-14: median
+    // 140 ms between ticks): integrating with the nominal 1/commandHz moved
+    // the setpoint, the integrator and the correction glide at half speed —
+    // at tele the setpoint trailed the plane by a median 1.2° at 1-2°/s and
+    // 4.3° at 2-3°/s (EIN961 walked off the corner of a 4° frame).
+    const tickDt = this.lastTickAt > 0
+      ? clamp((now - this.lastTickAt) / 1000, 0.001, TICK_DT_MAX_S)
+      : 1 / (cfg.predict.commandHz || 15);
+    this.lastTickAt = now;
     const d = this.driver();
     const pose = d.getPose();
     // Dead-reckoned current pose: position replies stall around drives, so
@@ -1083,7 +1098,7 @@ export class ControlLoop {
         // tilted head's pan rate is not (UAL875: 82°/s world, 24°/s pan).
         this.azTracker.steer(headAxes(azLeadPred ?? prediction, cfg.mount).azRateDps);
         this.elTracker.steer(headAxes(prediction, cfg.mount).elRateDps);
-        const dt = 1 / (cfg.predict.commandHz || 15);
+        const dt = tickDt;
         const azM = this.azTracker.propagate(dt, cfg.limits.panSpeedMaxDps * Math.abs(cfg.mount.panGain));
         const elM = this.elTracker.propagate(dt, cfg.limits.tiltSpeedMaxDps * Math.abs(cfg.mount.tiltGain));
         const w = worldFromMountFrame(azM, elM, cfg.mount);
@@ -1613,7 +1628,7 @@ export class ControlLoop {
         // the (smooth) feedforward rate + vision for centering; P only trims.
         const KP = PURSUIT_KP;
         const KI = PURSUIT_KI;
-        const dtTick = 1 / (cfg.predict.commandHz || 15);
+        const dtTick = tickDt;
         // Low-pass the pose error before the P term: the dead-reckoned pose
         // SNAPS when an inquiry reply lands after a stall, and raw P turns
         // each snap into a velocity step (wobble). The filter rides through

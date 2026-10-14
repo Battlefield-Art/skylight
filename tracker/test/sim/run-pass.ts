@@ -69,18 +69,32 @@ export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
   } as TrackerConfig;
 }
 
-/** Default feed delay, calibrated so that (with DEFAULT_HEAD) the twin
- *  reproduces the live along-track offset at aimLeadSec 0.6 — plane 0.1-0.35 s
- *  ahead of centre on 19 passes, 2026-10-14 12:30 (twin: +0.25 s at 1.3 s). */
-export const ADSB_DELAY_SEC = 1.3;
+/** Default feed delay, calibrated so that (with DEFAULT_HEAD, ticking at
+ *  LIVE_TICK_MS, and the pre-fix nominal-dt integration) the twin reproduces
+ *  the live along-track offset at aimLeadSec 0.6 — plane 0.1-0.35 s ahead of
+ *  centre on 19 passes, 2026-10-14 12:30 (twin: +0.38/+0.08 s at 0.3 s). The
+ *  first calibration (1.3 s) ticked at the nominal 15 Hz and so folded the
+ *  live loop's half-speed setpoint into a fake feed delay. */
+export const ADSB_DELAY_SEC = 0.3;
+
+/** Live control-loop tick period while tracking, ms (2026-10-14 session:
+ *  median 139-142 ms, ~7.6-8.2 Hz, although commandHz is 15). */
+export const LIVE_TICK_MS = 140;
 
 export const DEFAULT_HEAD: HeadOptions = { panLatencySec: 0.4, tiltLatencySec: 0.4, poseLagSec: 0.18 };
+
+export interface RunOptions {
+  /** Real control-loop tick period, ms. Live, the loop ticks every ~140 ms
+   *  while tracking (vision load) although commandHz asks for 15 Hz. */
+  tickMs?: number;
+}
 
 export async function runPass(
   tracker: TrackerConfig,
   flight: Flight,
   head: HeadOptions = DEFAULT_HEAD,
   profile?: CameraProfile,
+  opts: RunOptions = { tickMs: LIVE_TICK_MS },
 ): Promise<PassMetrics> {
   vi.stubEnv("SKYLIGHT_TRACKER_DATA", mkdtempSync(join(tmpdir(), "skylight-sim-")));
   const { ControlLoop } = await import("../../src/loop.js");
@@ -127,6 +141,11 @@ export async function runPass(
   loop.manualTarget("sim001");
   sim.driver.start();
   loop.start();
+  if (opts.tickMs) {
+    const l = loop as unknown as { timer: ReturnType<typeof setInterval> | null; tick(): void };
+    if (l.timer) clearInterval(l.timer);
+    l.timer = setInterval(() => l.tick(), opts.tickMs);
+  }
 
   const errs: number[] = [];
   const along: number[] = [];

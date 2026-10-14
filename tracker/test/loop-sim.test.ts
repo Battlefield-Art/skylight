@@ -60,3 +60,20 @@ describe("loop simulation: dropped zoom commands", () => {
     }, 60_000);
   }
 });
+
+// The live loop ticks at ~7 Hz while tracking (vision load) although it is
+// scheduled at 15 Hz. Integrating with the nominal period moved the setpoint
+// at half speed: at tele it trailed the plane by 1-4° (EIN961, 2026-10-14).
+// Pointing must not depend on how fast the loop happens to tick.
+describe("loop simulation: tick rate", () => {
+  for (const [name, flight] of [["routine", ROUTINE], ["overhead", OVERHEAD]] as const) {
+    it(`${name} pass: 15 Hz and 7 Hz ticks point the same`, async () => {
+      const t = baseTracker();
+      const fast = await runPass(t, flight, DEFAULT_HEAD, undefined, { tickMs: 67 });
+      const slow = await runPass(t, flight, DEFAULT_HEAD, undefined, { tickMs: 140 });
+      console.log(`${name} tick 67: ${JSON.stringify(fast)}\n${name} tick 140: ${JSON.stringify(slow)}`);
+      expect(Math.abs(slow.alongSec - fast.alongSec)).toBeLessThan(0.25);
+      expect(slow.errP50).toBeLessThan(fast.errP50 * 1.5 + 0.1);
+    }, 60_000);
+  }
+});

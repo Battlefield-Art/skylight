@@ -41,7 +41,7 @@
   "rippleTeleDeg": 0.25,
   "panLatencySec": 0.6,
   "tiltLatencySec": 0.4,
-  "aimLeadSec": 0.6
+  "aimLeadSec": -0.2
  },
  "zoom": {
   "auto": true,
