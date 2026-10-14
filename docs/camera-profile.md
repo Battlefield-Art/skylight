@@ -40,12 +40,28 @@ from the mount model.
 - `probe-speed-zoom.ts` — VISCA speed surface (to fold into one
   `characterize-camera.ts` that writes the profile JSON).
 
+## Offline twin
+
+`tracker/test/sim/` runs the real control loop and VISCA driver against a
+simulated head that moves the way a profile says (zoom-dependent discrete
+speeds, latency, stale pose reports, zoom travel), on a fake clock, for a
+synthetic flight at any mount angle. `tracker/test/loop-sim.test.ts` holds
+the reference passes (UAL875, EJM450, the wedge head's pole, a routine pass;
+level and 27° mounts). Test control changes here first.
+
 ## Migration (one measured change at a time)
 
-1. Profile type + config, seeded with the current camera's measured values;
-   driver and loop read it. No behaviour change.
-2. Zoom-vs-speed policy from the profile; remove gear/rate floor constants.
-3. Park decision from the profile; remove ZENITH_* constants, follow caps,
-   FF_SCALE_CROSSING (patches over the pre-2026-10-14 feedforward bug).
-4. Re-measure and cut `predict.aimLeadSec` (a patch over the same bug).
-5. One `characterize-camera.ts` producing the whole profile.
+1. ✅ Profile type + config, seeded with the current camera's measured values;
+   driver reads it (speed surface, absolute speeds, lens travel, tilt
+   detent stepper, park tilt).
+2. ✅ Zoom-vs-speed policy from the profile; gear/rate floor constants gone.
+3. ✅ Park decision from the profile (top speed × reach, safe park tilt);
+   ZENITH_PASS_EL / PAN_RATE / HOLD_TILT, follow caps, FF_SCALE_CROSSING and
+   the crossing no-lead rule removed (no effect in the twin once the
+   feedforward was fixed). Setpoint trackers run in head axes.
+4. ✅ `predict.aimLeadSec` learned from vision (along-track timing → fold).
+5. ⏳ Measure the speed surface at the actual zoom stops (interpolated now).
+6. ⏳ Focus: lens-unit constants in camera/focus.ts and loop.ts
+   (ZOOM_FOCUS_MIN_UNITS, TELE_SEED, servo/one-push thresholds) → profile.
+7. ⏳ ZENITH_PRE_SEC from the absolute-move speed; SFO_ARP from site config.
+8. ⏳ One `characterize-camera.ts` producing the whole profile.
