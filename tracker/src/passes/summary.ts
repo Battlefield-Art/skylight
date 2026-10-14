@@ -93,6 +93,10 @@ export interface PassTuning {
   maxSpeedStepFwps: number;
   speedReachFrac: number;
   lockedSigmaDeg: number;
+  /** Zoom sigma growth after a lock loss, deg/s (2026-10-14+). */
+  sigmaGrowthDps?: number;
+  /** Learned aim lead in force, s. */
+  aimLeadSec?: number;
   correctionSlewDps: number;
   kp: number;
   ki: number;

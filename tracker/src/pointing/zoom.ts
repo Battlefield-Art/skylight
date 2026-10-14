@@ -58,12 +58,8 @@ export function chooseZoom(
   // (pan-rate singularity). A live vision lock overrides all of that — the
   // detector is closing the loop, so trust the tight residual.
   const zenithFactor = 1 + Math.max(0, (azEl.elDeg - 78) / 4);
-  const sigma =
-    lockedSigmaDeg != null
-      ? lockedSigmaDeg * zenithFactor
-      : cfg.zoom.sigmaDeg * zenithFactor +
-        angularRateDps * TIMING_SIGMA_SEC +
-        lagDeg;
+  const openSigma = cfg.zoom.sigmaDeg * zenithFactor + angularRateDps * TIMING_SIGMA_SEC + lagDeg;
+  const sigma = lockedSigmaDeg != null ? Math.min(openSigma, lockedSigmaDeg * zenithFactor) : openSigma;
 
   let hfov = requiredHfovDeg(theta, sigma, cfg.zoom.fillFrac);
   const wide = Math.max(...lut.map((p) => p.hfovDeg));

@@ -174,6 +174,15 @@ export interface TrackerConfig {
      * what lets the camera zoom past ~5× to the framing target once locked.
      */
     lockedSigmaDeg: number;
+    /**
+     * After the lock drops, the pointing sigma grows from lockedSigmaDeg at
+     * this rate (deg/s) up to the open-loop estimate instead of jumping to
+     * it: the applied vision correction keeps the aim good for a while
+     * (2026-10-14: re-lock offsets 0.4-1.0° for 1-8 s gaps), and the jump
+     * zoomed out a stop on every brief dropout — the lens refocused, the
+     * plane went soft, the lock dropped again.
+     */
+    sigmaGrowthDps: number;
     /** Fraction of frame height the plane should fill. */
     fillFrac: number;
     /**
@@ -620,6 +629,7 @@ export const DEFAULT_CONFIG: Config = {
       auto: true,
       sigmaDeg: 0.6,
       lockedSigmaDeg: 0.35,
+      sigmaGrowthDps: 0.1,
       fillFrac: 0.28,
       minHfovDeg: 0,
       minHfovAboveRateDps: 0,

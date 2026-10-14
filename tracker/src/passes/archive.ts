@@ -400,6 +400,8 @@ export class PassArchive {
       maxSpeedStepFwps: cfg.zoom.maxSpeedStepFwps,
       speedReachFrac: cfg.zoom.speedReachFrac,
       lockedSigmaDeg: cfg.zoom.lockedSigmaDeg,
+      sigmaGrowthDps: cfg.zoom.sigmaGrowthDps,
+      aimLeadSec: cfg.predict.aimLeadSec,
       correctionSlewDps: cfg.vision.correctionSlewDps,
       kp: PURSUIT_KP,
       ki: PURSUIT_KI,

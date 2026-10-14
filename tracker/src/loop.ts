@@ -330,6 +330,8 @@ export class ControlLoop {
   private speedFloorHfov = 0;
   /** Wall time of the most recent fresh detection (survives lastDetection = null). */
   private lastDetSeenAt = 0;
+  /** Last tick with a fresh, motion-consistent lock on this target (0 = none yet). */
+  private lastLockFreshAt = 0;
   /** This pass was classified as a zenith pass inbound (see zenithHold). */
   private zenithLatched = false;
   /** Last tick the search clock was held (plane below the skyline, or the
@@ -893,6 +895,7 @@ export class ControlLoop {
     this.lastResidFrac = 1;
     this.lockHits = 0;
     this.lagDegLP = 0;
+    this.lastLockFreshAt = 0;
     this.ripplePanLP = 0;
     this.rippleTiltLP = 0;
     this.cmdHist.length = 0;
@@ -1239,10 +1242,14 @@ export class ControlLoop {
       // Which rule set the zoom this tick (logged per pass row as `zw`, to
       // find what drives in→out pumping).
       this.zoomWhy = lockFresh ? "frameLocked" : "frameOpen";
-      const zoom = chooseZoom(
-        targetAc, prediction.azEl, cfg, rateDps, this.lagDegLP,
-        lockFresh ? cfg.zoom.lockedSigmaDeg : undefined,
-      );
+      if (lockFresh) this.lastLockFreshAt = now;
+      // Since the last lock, the pointing uncertainty grows gradually
+      // (zoom.sigmaGrowthDps) — chooseZoom caps it at the open-loop sigma.
+      const sinceLock = this.lastLockFreshAt > 0 ? (now - this.lastLockFreshAt) / 1000 : Infinity;
+      const sigmaNow = lockFresh
+        ? cfg.zoom.lockedSigmaDeg
+        : Number.isFinite(sinceLock) ? cfg.zoom.lockedSigmaDeg + (cfg.zoom.sigmaGrowthDps ?? 0.1) * sinceLock : undefined;
+      const zoom = chooseZoom(targetAc, prediction.azEl, cfg, rateDps, this.lagDegLP, sigmaNow);
       if (park && zoom.hfovDeg < ZENITH_MIN_HFOV) {
         // Wide through the crossing so the fly-through stays framed.
         zoom.hfovDeg = ZENITH_MIN_HFOV;
