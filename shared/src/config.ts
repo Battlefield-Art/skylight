@@ -157,6 +157,12 @@ export interface TrackerConfig {
      * ADS-B was right (along-track ≈ 0) — the head trails its own estimate.
      */
     aimLeadSec: number;
+    /**
+     * Learn aimLeadSec from vision: per pass, the plane's along-track
+     * offset from the ADS-B aim (s); when 3 passes agree, half of it is
+     * folded in (tracker/src/pointing/leadLearn.ts). Any camera / feed.
+     */
+    learnAimLead: boolean;
   };
   zoom: {
     auto: boolean;
@@ -608,6 +614,7 @@ export const DEFAULT_CONFIG: Config = {
       panLatencySec: 0.6,
       tiltLatencySec: 0.4,
       aimLeadSec: 0,
+      learnAimLead: true,
     },
     zoom: {
       auto: true,

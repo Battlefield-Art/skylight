@@ -53,6 +53,7 @@ import {
   shiftDeg,
   type LandmarkSet,
 } from "./calibration/landmarks.js";
+import { alongTrackSec, LeadLearner } from "./pointing/leadLearn.js";
 import { parkLimits, planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
@@ -801,6 +802,7 @@ export class ControlLoop {
 
   /** Bias corrections sampled while locked this pass, head frame (mount az, el deg). */
   private passBias: { az: number; el: number }[] = [];
+  private leadLearn = new LeadLearner();
   private biasSampleAt = 0;
   /** Recent passes' median corrections, newest last. */
   private biasHistory: { az: number; el: number; t: number }[] = [];
@@ -814,6 +816,19 @@ export class ControlLoop {
    * the median into the offsets (off_new = off − corr), shift auto-cal's
    * samples by the same delta, and have the landmark references re-shot.
    */
+  /** End of a pass: fold the agreed along-track timing error into the aim
+   *  lead (pointing/leadLearn.ts) — replaces a hand-set aimLeadSec. */
+  private foldLead(now: number): void {
+    const cfg = this.cfg();
+    const lead = cfg.predict.aimLeadSec ?? 0;
+    const r = this.leadLearn.endPass(now, lead);
+    if (!r || !cfg.predict.learnAimLead) return;
+    const leadSec = Math.round(r.leadSec * 100) / 100;
+    this.upstream.patchConfig({ tracker: { predict: { aimLeadSec: leadSec } } } as Partial<Config>);
+    this.recorder.write("leadFold", { from: lead, to: leadSec, medianSec: r.medianSec });
+    console.log(`[tracker] aim lead ${lead.toFixed(2)} → ${leadSec.toFixed(2)} s (plane ${r.medianSec >= 0 ? "ahead" : "behind"} by ${Math.abs(r.medianSec).toFixed(2)} s over the last passes)`);
+  }
+
   private foldPassBias(now: number): void {
     const b = this.passBias;
     this.passBias = [];
@@ -942,6 +957,7 @@ export class ControlLoop {
         }
         for (const [h, until] of this.targetCooldown) if (until <= now) this.targetCooldown.delete(h);
         this.foldPassBias(now);
+        this.foldLead(now);
         this.current = hex ? { hex, sinceMs: now } : null;
         this.resetSetpoint();
         this.recorder.write("target", { hex });
@@ -2312,6 +2328,16 @@ export class ControlLoop {
         // The lock IS the temporal confirmation now: a track only becomes
         // the lock after several coherent, motion-consistent frames.
         const confirmed = lt.hits >= 4;
+        // Timing evidence for the aim-lead fold (pointing/leadLearn.ts): the
+        // plane's offset from where the ADS-B aim alone would point (the
+        // applied vision correction is that aim's learned offset), along its
+        // motion, in seconds.
+        if (confirmed && elF >= 15 && elF <= 75) {
+          const sec = alongTrackSec(
+            offAz + this.corrAzApp, offElDeg + this.corrElApp, elF, atFrame.rateAzDps, atFrame.rateElDps,
+          );
+          if (sec !== null) this.leadLearn.push(sec);
+        }
 
         if (confirmed && cfg.vision.applyCorrection) {
           // Where the blob (the plane, then) is NOW, world frame:
