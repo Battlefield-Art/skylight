@@ -137,3 +137,36 @@ describe("zoom delivery", () => {
     expect(sent.filter((s) => s === "81 01 04 47 00 05 09 0d ff")).toHaveLength(1); // plain zoom re-send
   });
 });
+
+describe("zoom vs a running focus drive", () => {
+  it("a new zoom ends a timed focus drive first (zooms sent during one were dropped 5× as often)", () => {
+    const { cam, sent } = makeCam();
+    cam.setZoom(976);
+    cam.focusNudge(150); // ~1.6 s near drive
+    sent.length = 0;
+    cam.setZoom(720);
+    expect(sent[0]).toBe("81 01 04 08 00 ff"); // focus stop
+    expect(sent[1]).toBe("81 01 04 47 00 02 0d 00 ff");
+    sent.length = 0;
+    vi.advanceTimersByTime(3000);
+    expect(sent).toEqual([]); // no orphaned stop later
+  });
+
+  it("the acquire move's zoom does the same", () => {
+    const { cam, sent } = makeCam();
+    cam.focusNudge(-150);
+    sent.length = 0;
+    cam.gotoAbsolute({ panDeg: 10, tiltDeg: 20, zoomUnits: 0 });
+    (cam as unknown as { flushWanted(): void }).flushWanted();
+    const stop = sent.indexOf("81 01 04 08 00 ff");
+    const zoom = sent.indexOf(ZOOM_WIDE);
+    expect(stop).toBeGreaterThanOrEqual(0);
+    expect(stop).toBeLessThan(zoom);
+  });
+
+  it("no focus stop when no drive is running", () => {
+    const { cam, sent } = makeCam();
+    cam.setZoom(720);
+    expect(sent).not.toContain("81 01 04 08 00 ff");
+  });
+});

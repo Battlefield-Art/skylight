@@ -442,6 +442,10 @@ export class ViscaCamera implements CameraDriver {
     this.lastSentZoom = z;
     this.noteZoomCommand(z);
     this.lastSentFocus = null; // zoom tracking moves the focus
+    // A timed focus drive is for the zoom the lens is leaving; and zoom
+    // commands sent during one were dropped 5× as often (5.7% vs 1.1%,
+    // 2026-10-14) — end it first, as setZoomFocus does.
+    this.stopFocusDrive();
     this.sendCommand([0x81, 0x01, 0x04, 0x47, ...nibbles(z, 4), 0xff]);
     this.zoomSent(z);
   }
@@ -763,6 +767,7 @@ export class ViscaCamera implements CameraDriver {
       this.lastSentDurMs = travelSec * 1000 + 400;
     }
     if (zoomMoved) {
+      this.stopFocusDrive(); // see setZoom
       const z = nibbles(Math.round(w.zoomUnits), 4);
       this.sendCommand([0x81, 0x01, 0x04, 0x47, ...z, 0xff]);
       this.lastSentZoom = w.zoomUnits;
