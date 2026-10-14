@@ -91,7 +91,7 @@ Sent by the Pi as `POST /ingest/<id>`; stored verbatim in D1 `meta`; returned by
     "planeSizeFrac": 0.21,             // plane width as a fraction of the frame width in the best frame
     "centredSec": 12.4,                // seconds the plane sat inside the central 50% of the frame
     "bestFrameSec": 23.8,              // CLIP time of the beauty shot (= poster frame)
-    "flags": [],                       // any of: soft-focus no-plane short lost-lock jumpy wrap-pinned low-zoom
+    "flags": [],                       // any of: soft-focus no-plane short lost-lock jumpy wrap-pinned low-zoom lens-stuck
     "method": "q1"
   },
   "events": [                          // seconds from startedAt, sorted
@@ -242,6 +242,8 @@ As implemented (q1, `tracker/src/passes/quality.ts`, re-scorer `passes/tools/res
   HFOV ≤ 5.5°; `jumpy` > 6 in-frame jumps/min at HFOV ≤ 8° (detection moves > 15% of the
   frame width within 0.6 s); `wrap-pinned` dead-zone anticipation engaged and lock % < 55;
   `low-zoom` tightest HFOV > 9°.
+  `lens-stuck` (since 2026-10-13) the camera ignored zoom/focus commands for ≥10 s during the
+  pass (`tracking.lensStuckSec`) — a hardware wedge, not a tracking fault; needs a power-cycle.
 - `poster.jpg` is served with `cache-control: public, max-age=3600, stale-while-revalidate=86400`
   (not immutable) because re-scoring replaces it; clips and series stay immutable.
 

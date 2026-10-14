@@ -174,6 +174,9 @@ export interface PassJson {
     poseErrMedDeg: number | null;
     corrMaxDeg: number | null;
     zoomChanges: number;
+    /** Longest stretch the lens ignored zoom commands during the pass, s
+     *  (driver lens-stuck detector; null/absent = never). */
+    lensStuckSec?: number | null;
   };
   build: PassBuild;
   tuning: PassTuning;
@@ -209,6 +212,8 @@ export interface PassInput {
   camera: PassCamera;
   media: PassMedia;
   notes?: string[];
+  /** Longest lens-stuck stretch seen during the pass, s (null = none). */
+  lensStuckSec?: number | null;
 }
 
 // --- helpers ---
@@ -486,6 +491,7 @@ export function buildPass(input: PassInput): PassJson {
       poseErrMedDeg: r2(median(poseErr)),
       corrMaxDeg: r2(corrMax),
       zoomChanges,
+      lensStuckSec: r1(input.lensStuckSec ?? null),
     },
     build: input.build,
     tuning: input.tuning,

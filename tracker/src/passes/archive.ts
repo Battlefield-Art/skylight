@@ -82,6 +82,8 @@ class PassSession {
   locked = false;
   lastHfov: number | null = null;
   lastPredictedAt: number;
+  /** Longest lens-stuck reading seen (driver.lensStuckSec), s. */
+  lensStuckSec: number | null = null;
 
   constructor(
     readonly hex: string,
@@ -301,6 +303,8 @@ export class PassArchive {
       track: ac?.track ?? null,
     };
     s.samples.push(row);
+    const stuck = state.driver?.lensStuckSec;
+    if (stuck != null && stuck > (s.lensStuckSec ?? 0)) s.lensStuckSec = stuck;
     // Derived events: lock transitions and zoom rung changes.
     const locked = isLocked(row);
     if (locked !== s.locked) {
@@ -420,6 +424,7 @@ export class PassArchive {
         clipDurationSec: clip?.durationSec ?? null,
         clipOffsetSec,
       },
+      lensStuckSec: s.lensStuckSec,
       notes: clip?.truncated ? ["clip truncated (writer back-pressure)"]
         : clip?.restarted ? ["clip ends early: video stream restarted mid-pass"]
         : [],

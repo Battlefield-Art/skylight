@@ -24,7 +24,9 @@ export const QUALITY_METHOD = "q1";
 export const QUALITY_METHOD_TELEMETRY = "q1-telemetry";
 
 export type QualityFlag =
-  | "soft-focus" | "no-plane" | "short" | "lost-lock" | "jumpy" | "wrap-pinned" | "low-zoom";
+  | "soft-focus" | "no-plane" | "short" | "lost-lock" | "jumpy" | "wrap-pinned" | "low-zoom"
+  /** The lens ignored zoom/focus commands (hardware wedge) — not a tracking fault. */
+  | "lens-stuck";
 
 export interface PassQuality {
   score: number;
@@ -576,6 +578,7 @@ export function scorePass(inp: ScoreInput): PassQuality {
   if (lockPct < LOST_LOCK_PCT || st.lostGapTeleSec > LOST_GAP_TELE_SEC) flags.push("lost-lock");
   if (st.jumpsPerMin > JUMPY_PER_MIN) flags.push("jumpy");
   if (pass.pass?.deadZoneWrap && lockPct < WRAP_PINNED_LOCK_PCT) flags.push("wrap-pinned");
+  if ((t.lensStuckSec ?? 0) >= 10) flags.push("lens-stuck");
   // "Low zoom" means the plane stayed small, not that the lens stayed wide:
   // a close A380 fills the frame at 15° (DLH455 was flagged and looked great).
   const spanM = spanForCategory(pass.aircraft?.category);
