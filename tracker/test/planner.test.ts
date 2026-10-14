@@ -21,14 +21,13 @@ import {
   planPass,
   zenithHold,
   ZENITH_MIN_HFOV,
-  ZENITH_PRE_SEC,
   ZENITH_REGIME_EL,
 } from "../src/pointing/planner.js";
 import { predictAim, TrackHistory } from "../src/pointing/predict.js";
 import { chooseZoom } from "../src/pointing/zoom.js";
 
 /** Park limits as inputs (these tests are about the planner's geometry). */
-const PARK = { aboveDps: 25, tiltDeg: 84 };
+const PARK = { aboveDps: 25, tiltDeg: 84, leadSec: 3.5 };
 
 const SITE: GeoPoint = { lat: 37.6213, lon: -122.379, altM: 0 };
 const CFG = {
@@ -107,7 +106,7 @@ describe("planPass", () => {
     const holds: { azDeg: number; elDeg: number }[] = [];
     for (let t = 18; t < 23; t += 0.1) {
       const plan = planPass(fix(t), SITE, t * 1000, undefined, undefined, undefined, PARK);
-      if (plan && plan.tCaSec > 0 && plan.tCaSec <= ZENITH_PRE_SEC) holds.push(plan.holdAzEl);
+      if (plan && plan.tCaSec > 0 && plan.tCaSec <= PARK.leadSec) holds.push(plan.holdAzEl);
     }
     expect(holds.length).toBeGreaterThan(20);
     const azs = holds.map((h) => h.azDeg);
@@ -220,7 +219,7 @@ describe("zenith crossing, end to end with a rate-limited camera", () => {
   it("parks on time inbound, follows inside the cone outbound", () => {
     // Far out: no hold yet, whatever the elevation says.
     const far = planPass(overheadFix(60), SITE, 60_000, undefined, undefined, undefined, PARK);
-    expect(far?.tCaSec).toBeGreaterThan(ZENITH_PRE_SEC);
+    expect(far?.tCaSec).toBeGreaterThan(PARK.leadSec);
     expect(zenithHold(far, ZENITH_REGIME_EL + 1)).toBeNull();
     // Just before closest approach: park.
     const tCa = far!.tCaSec;

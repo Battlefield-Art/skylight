@@ -39,11 +39,26 @@ export interface ParkLimits {
   aboveDps: number;
   /** Highest mechanical tilt to command (and to follow up to), deg. */
   tiltDeg: number;
+  /**
+   * Enter the park this many seconds before closest approach: a worst-case
+   * 180° pre-rotation at the camera's absolute-move speed, plus settling.
+   * (Starting at an elevation line instead left the camera still slewing as
+   * the plane crossed.)
+   */
+  leadSec: number;
 }
 
 export function parkLimits(profile: CameraProfile, reachFrac: number): ParkLimits {
-  const top = Math.max(...profile.speedSurface[0].pan.map((e) => e[1]));
-  return { aboveDps: (reachFrac > 0 ? reachFrac : 1) * top, tiltDeg: profile.mechanical.parkTiltMaxDeg };
+  const wide = profile.speedSurface[0].pan;
+  const top = Math.max(...wide.map((e) => e[1]));
+  // absolute moves run at the rate of their speed setting at wide
+  const abs = wide.reduce((b, e) =>
+    Math.abs(e[0] - profile.absolute.panSetting) < Math.abs(b[0] - profile.absolute.panSetting) ? e : b)[1];
+  return {
+    aboveDps: (reachFrac > 0 ? reachFrac : 1) * top,
+    tiltDeg: profile.mechanical.parkTiltMaxDeg,
+    leadSec: 180 / Math.max(10, abs) + PARK_SETTLE_SEC,
+  };
 }
 /** While the target is above this elevation we are "in the crossing". */
 export const ZENITH_REGIME_EL = 72;
@@ -55,12 +70,8 @@ export const ZENITH_REGIME_EL = 72;
  * ±12° from tick to tick and the park chased it (observed).
  */
 export const ZENITH_EXIT_EL = 70;
-/**
- * Enter the hold this many seconds before closest approach: the 180°
- * pre-rotation takes ~2.6 s plus settle, and starting it at the 78° line
- * (the old rule) meant the camera was still slewing while the plane crossed.
- */
-export const ZENITH_PRE_SEC = 3.5;
+/** Settling allowance after the park slew, s (on top of the slew time). */
+const PARK_SETTLE_SEC = 1.0;
 /** Minimum HFOV while crossing, deg (wide so the fly-through stays framed). */
 export const ZENITH_MIN_HFOV = 30;
 
@@ -83,6 +94,8 @@ export interface PassPlan {
   holdAzEl: { azDeg: number; elDeg: number };
   /** Azimuth of closest approach (for the UI). */
   caAzDeg: number;
+  /** Seconds before closest approach to start the park (ParkLimits.leadSec). */
+  parkLeadSec: number;
   /**
    * Pan dead-zone crossing (only when `wrap` options are given): seconds
    * until the trajectory's pan leaves the reachable range, seconds until it
@@ -224,6 +237,7 @@ export function planPass(
       return wrap ? worldFromMountFrame(az, el, wrap.mount) : { azDeg: az, elDeg: el };
     })(),
     caAzDeg: caAz,
+    parkLeadSec: park.leadSec,
     wrapInSec: wrapOut !== null ? wrapIn : null,
     wrapOutSec: wrapOut,
     wrapExitPanDeg: wrapExitPan,
@@ -266,14 +280,14 @@ export function zenithHold(
 ): ZenithHold | null {
   if (!plan) return null;
   if (!plan.zenithPass && !latched) return null;
-  // Inbound: TIME-based — park from ZENITH_PRE_SEC before closest approach,
+  // Inbound: TIME-based — park from parkLeadSec before closest approach,
   // so the pre-rotation completes just as the plane arrives. (An elevation
   // trigger fires far too early on a high, slow-rising pass: at 2500 m the
   // 72° line is still 6 s out, and the plane sat 17° off the parked aim.)
   // Outbound (tCa ≤ 0): follow while still inside the regime cone.
   const inbound = plan.tCaSec > 0;
   if (inbound) {
-    if (!plan.zenithPass || plan.tCaSec > ZENITH_PRE_SEC) return null;
+    if (!plan.zenithPass || plan.tCaSec > plan.parkLeadSec) return null;
     return { ...plan.holdAzEl, phase: "park" };
   }
   if (currentElDeg < ZENITH_REGIME_EL) return null;

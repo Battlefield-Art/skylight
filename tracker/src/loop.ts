@@ -12,6 +12,7 @@
 // auto-calibration.
 
 import {
+  DEFAULT_CONFIG,
   horizonMinEl,
   AxisTracker,
   azElFromSite,
@@ -604,7 +605,7 @@ export class ControlLoop {
           v: nextPlane(
             this.upstream.getAircraft(), cfg.site, now, cfg.target, cfg.limits.horizon,
             this.current,
-            cfg.target.departurePriority === false ? null : (this.upstream.getConfig().airport ?? SFO_ARP),
+            cfg.target.departurePriority === false ? null : (this.upstream.getConfig().airport ?? DEFAULT_CONFIG.airport),
             this.sunAt(cfg.site, now),
             cfg.targetMode,
             this.targetCooldown,
@@ -940,7 +941,7 @@ export class ControlLoop {
       undefined,
       cfg.limits.horizon,
       this.sunAt(cfg.site, now),
-      cfg.target.departurePriority === false ? null : (this.upstream.getConfig?.()?.airport ?? SFO_ARP),
+      cfg.target.departurePriority === false ? null : (this.upstream.getConfig?.()?.airport ?? DEFAULT_CONFIG.airport),
       this.targetCooldown,
     );
 
@@ -1785,8 +1786,8 @@ export class ControlLoop {
       now - this.lastTargetAt > cfg.home.afterSec * 1000
     ) {
       const azDeg =
-        cfg.home.mode === "sfo"
-          ? azElFromSite(cfg.site, { ...SFO_ARP, altM: cfg.site.altM }).azDeg
+        cfg.home.mode === "sfo" // "face the configured airport" (named for the first site)
+          ? azElFromSite(cfg.site, { ...(this.upstream.getConfig().airport ?? DEFAULT_CONFIG.airport), altM: cfg.site.altM }).azDeg
           : cfg.home.azDeg;
       const pt = mountFromWorld(azDeg, cfg.home.elDeg, cfg.mount);
       this.atHome = true;
@@ -2520,5 +2521,3 @@ export function mergeBlobs<T extends { cx: number; cy: number; areaPx: number; p
   return out;
 }
 
-/** SFO airport reference point (the project's anchor airport). */
-const SFO_ARP = { lat: 37.6213, lon: -122.379 };
