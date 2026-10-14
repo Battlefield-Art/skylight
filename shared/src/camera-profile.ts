@@ -34,6 +34,14 @@ export interface CameraProfile {
     /** Fastest zoom travel, lens units per second (bounds plausible readings). */
     travelUnitsPerSec: number;
   };
+  mechanical: {
+    /**
+     * Highest tilt to command for an overhead park, deg (mechanical). Some
+     * firmwares "auto-flip" when a fast move overshoots through vertical,
+     * after which pan drives run backwards.
+     */
+    parkTiltMaxDeg: number;
+  };
 }
 
 /** Rate at `step` within one row: linear between neighbouring measured steps. */
@@ -195,4 +203,8 @@ export const TONGVEO_PROFILE: CameraProfile = {
   },
   // Zoom travel measured ~400-500 units/s in pass series (2026-10-14).
   lens: { travelUnitsPerSec: 500 },
+  // A fast absolute move overshooting through ~90° trips the firmware's
+  // auto-flip; pan then drives BACKWARDS until tilt is below ~65° (UAL433,
+  // KAL024 2026-10-11). Parks hold 6° short of vertical.
+  mechanical: { parkTiltMaxDeg: 84 },
 };

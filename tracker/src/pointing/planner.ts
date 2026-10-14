@@ -19,25 +19,32 @@ import {
   worldFromMountFrame,
   predictGeo,
   type Aircraft,
+  type CameraProfile,
   type GeoPoint,
   type MountModel,
 } from "@shared/index.js";
 
-/** A pass peaking above this elevation is handled with the flip strategy. */
-export const ZENITH_PASS_EL = 82;
 /**
- * ...or one whose azimuth would have to sweep faster than this, deg/s. A
- * close pass peaking at 70-80° demands 25-60°/s of pan at closest approach
- * (observed: a 140° swing in 4 s that overshot into the ±175° stop) — that
- * is a whip-pan, not tracking. Park on the exit side and let it fly through.
+ * When to stop chasing and park for a fly-through — from the camera, not
+ * tuned constants: a pass is parked when its head pan rate would exceed
+ * what the camera can deliver with headroom (zoom.speedReachFrac × its top
+ * pan speed, from the profile), or its path rises above the highest tilt it
+ * is safe to command (profile.mechanical.parkTiltMaxDeg). Until 2026-10-14
+ * this was "peak ≥ 82° or > 25°/s": tuned while the feedforward was in the
+ * wrong frame — chasing at 36°/s overshot 30° then (UAL875 2026-10-12); in
+ * the loop twin with the fix, chasing beats parking up to ~60°/s.
  */
-export const ZENITH_PAN_RATE_DPS = 25;
-// (22 once parked too eagerly: a pass peaking at 72-75° parked on the el-70
-// exit azimuth, 40-60° off the plane — the exit line sits where the azimuth
-// changes fastest. A pass peaking below the hold elevation now parks AT its
-// closest-approach point instead, so the threshold could come back down:
-// at 40 the loop chased UAL875 (36°/s, 2026-10-12, 390 m slant) and fell
-// 15-19° behind through the crossing, then overshot 30°.)
+export interface ParkLimits {
+  /** Park when the head pan rate the pass needs exceeds this, deg/s. */
+  aboveDps: number;
+  /** Highest mechanical tilt to command (and to follow up to), deg. */
+  tiltDeg: number;
+}
+
+export function parkLimits(profile: CameraProfile, reachFrac: number): ParkLimits {
+  const top = Math.max(...profile.speedSurface[0].pan.map((e) => e[1]));
+  return { aboveDps: (reachFrac > 0 ? reachFrac : 1) * top, tiltDeg: profile.mechanical.parkTiltMaxDeg };
+}
 /** While the target is above this elevation we are "in the crossing". */
 export const ZENITH_REGIME_EL = 72;
 /**
@@ -54,15 +61,6 @@ export const ZENITH_EXIT_EL = 70;
  * (the old rule) meant the camera was still slewing while the plane crossed.
  */
 export const ZENITH_PRE_SEC = 3.5;
-/**
- * Tilt commanded while holding for the fly-through. NOT closer to vertical
- * than this: a fast absolute move that overshoots through ~90° trips the
- * firmware's auto-flip, after which pan drives run BACKWARDS until the tilt
- * is back below ~65° (observed twice: UAL433 15:09 — 80° wrong-way swing on
- * the exit leg; KAL024 09:25 — pan driven into the +175° stop). The zenith
- * is still 6° inside a 30° frame from here.
- */
-export const ZENITH_HOLD_TILT = 84;
 /** Minimum HFOV while crossing, deg (wide so the fly-through stays framed). */
 export const ZENITH_MIN_HFOV = 30;
 
@@ -79,7 +77,7 @@ export interface PassPlan {
   outboundAzDeg: number;
   /**
    * World direction to park on for the fly-through: the exit azimuth at
-   * ZENITH_HOLD_TILT, both in the HEAD frame (the singularity is the mount's
+   * the park tilt, both in the HEAD frame (the singularity is the mount's
    * pole — on the tilted base that is not the zenith).
    */
   holdAzEl: { azDeg: number; elDeg: number };
@@ -114,7 +112,8 @@ export function planPass(
   now: number,
   horizonSec = 120,
   stepSec = 0.5,
-  wrap?: WrapOptions,
+  wrap: WrapOptions | undefined,
+  park: ParkLimits,
 ): PassPlan | null {
   const geo = aircraftGeoPoint(ac);
   if (!geo || ac.gs == null || ac.track == null) return null;
@@ -207,20 +206,20 @@ export function planPass(
     }
   }
 
+  const holdEl = wrap ? park.tiltDeg * wrap.mount.tiltGain + wrap.mount.tiltOffsetDeg : park.tiltDeg;
   return {
-    zenithPass: elMax >= ZENITH_PASS_EL || azRateMax >= ZENITH_PAN_RATE_DPS,
+    zenithPass: elMax >= holdEl || azRateMax >= park.aboveDps,
     azRateMaxDps: azRateMax,
     elMaxDeg: elMax,
     tCaSec: tCa,
     outboundAzDeg: outboundAz ?? caAz,
-    // ZENITH_HOLD_TILT is a MECHANICAL tilt (the auto-flip guard): on the
-    // wedge the tilt zero sits ~10° below the mount horizon, so a head-frame
-    // 84° would ask for an unreachable ~95° tilt.
+    // park.tiltDeg is a MECHANICAL tilt (the auto-flip guard): on the
+    // wedge the tilt zero sits below the mount horizon, so it maps to a
+    // different head-frame elevation (holdEl).
     holdAzEl: (() => {
       // Through the pole (peak above the hold elevation): wait just under
       // vertical on the exit side. A fast pass that peaks LOWER: wait on the
       // closest-approach point itself — it flies through the frame centre.
-      const holdEl = wrap ? ZENITH_HOLD_TILT * wrap.mount.tiltGain + wrap.mount.tiltOffsetDeg : ZENITH_HOLD_TILT;
       const [az, el] = elMax >= holdEl ? [outboundAz ?? caAz, holdEl] : [caAz, elMax];
       return wrap ? worldFromMountFrame(az, el, wrap.mount) : { azDeg: az, elDeg: el };
     })(),

@@ -738,6 +738,7 @@ export function mergeTrackerConfig(
       ...(patch.camera ?? {}),
       absolute: { ...base.camera.absolute, ...(patch.camera?.absolute ?? {}) },
       lens: { ...base.camera.lens, ...(patch.camera?.lens ?? {}) },
+      mechanical: { ...base.camera.mechanical, ...(patch.camera?.mechanical ?? {}) },
     },
     mount: { ...base.mount, ...(patch.mount ?? {}) },
     target: { ...base.target, ...(patch.target ?? {}) },

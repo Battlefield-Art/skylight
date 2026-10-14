@@ -53,7 +53,7 @@ import {
   shiftDeg,
   type LandmarkSet,
 } from "./calibration/landmarks.js";
-import { planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
+import { parkLimits, planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/planner.js";
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom, snapToStop, speedFloorHfov, zoomStopsHfov } from "./pointing/zoom.js";
@@ -989,7 +989,7 @@ export class ControlLoop {
         mount: cfg.mount,
         panMinDeg: cfg.limits.panMinDeg,
         panMaxDeg: cfg.limits.panMaxDeg,
-      });
+      }, parkLimits(cfg.camera, cfg.zoom.speedReachFrac));
       const headEl = mountFrameFromWorld(prediction.azEl.azDeg, prediction.azEl.elDeg, cfg.mount).elDeg;
       const hold = zenithHold(plan, headEl, this.zenithLatched);
       if (hold?.phase === "park") this.zenithLatched = true;
