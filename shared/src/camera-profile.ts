@@ -185,6 +185,20 @@ const TONGVEO_SPEED_SURFACE: SpeedRow[] = [
     pan: [[0, 1.47], [1, 1.32], [2, 1.39], [3, 2.8], [4, 2.97], [6, 7.0], [8, 7.0], [12, 14.84], [16, 21.11], [18, 23.19]],
     tilt: [[0, 1.47], [1, 1.36], [2, 1.61], [3, 2.93], [5, 3.08], [8, 4.32], [10, 6.15]],
   },
+  // Measured at the zoom STOPS 2026-10-14 (probe-speed-zoom.ts): until then
+  // the 1260/1385 speeds were interpolated between the 1200 and 1437 rows —
+  // which implied a ~4°/s pan gear at 1385 the camera doesn't have (it has
+  // tele's ~1.4/3/7°/s there).
+  {
+    zoom: 1260,
+    pan: [[0, 1.32], [4, 2.79], [8, 6.6], [12, 15.7], [16, 15.63], [18, 22.19]],
+    tilt: [[0, 1.51], [4, 2.93], [8, 4.59], [16, 8.04]],
+  },
+  {
+    zoom: 1385,
+    pan: [[0, 1.42], [4, 1.55], [8, 2.97], [12, 7.06], [16, 7.39], [18, 7.06]],
+    tilt: [[0, 1.62], [4, 1.61], [8, 3.06], [16, 6.83]],
+  },
   // Full tele (measured 2026-10-10 15:17, probe-speed-zoom.ts): bytes 0-4
   // are ALL the ~1.5°/s floor gear on both axes (pan 1.56/1.48/1.47/1.32/
   // 1.41, tilt 1.61/1.55/1.44/1.71/1.43). Bytes ≥5 still carried over from
@@ -205,7 +219,7 @@ const TONGVEO_SPEED_SURFACE: SpeedRow[] = [
 ];
 
 export const TONGVEO_PROFILE: CameraProfile = {
-  model: "TONGVEO VISCA-over-IP 20× (speed surface 2026-06-10/2026-10-10)",
+  model: "TONGVEO VISCA-over-IP 20× (speed surface 2026-06-10/2026-10-10/2026-10-14)",
   speedSurface: TONGVEO_SPEED_SURFACE,
   absolute: {
     // Absolute moves flat out (pan 0x18 / tilt 0x14, the maxima) except long
