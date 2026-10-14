@@ -30,6 +30,9 @@ export interface Flight {
   trackDeg: number;
   /** Climb rate, ft/min (0 = level). */
   climbFpm?: number;
+  /** How old the position in each "fresh" ADS-B fix really is, s (the feed
+   *  chain's delay — not reflected in its own age fields). */
+  adsbDelaySec?: number;
   durationSec: number;
 }
 
@@ -45,6 +48,8 @@ export interface PassMetrics {
   errFrameP95: number;
   /** Loop events of interest (zenith park/follow/release), with sim time. */
   events: string[];
+  /** Median along-track offset of the plane from the camera axis, s (+ = ahead). */
+  alongSec: number;
 }
 
 export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
@@ -59,6 +64,11 @@ export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
     ...over,
   } as TrackerConfig;
 }
+
+/** Default feed delay, calibrated so that (with DEFAULT_HEAD) the twin
+ *  reproduces the live along-track offset at aimLeadSec 0.6 — plane 0.1-0.35 s
+ *  ahead of centre on 19 passes, 2026-10-14 12:30 (twin: +0.25 s at 1.3 s). */
+export const ADSB_DELAY_SEC = 1.3;
 
 export const DEFAULT_HEAD: HeadOptions = { panLatencySec: 0.4, tiltLatencySec: 0.4, poseLagSec: 0.18 };
 
@@ -84,7 +94,7 @@ export async function runPass(
   const t0 = Date.now();
   let fix: Aircraft | null = null;
   const makeFix = (): Aircraft => {
-    const sec = (Date.now() - t0) / 1000;
+    const sec = (Date.now() - t0) / 1000 - (flight.adsbDelaySec ?? ADSB_DELAY_SEC);
     const p = predictGeo(kin, sec);
     return {
       hex: "sim001", flight: "SIM1", typeCode: "B772", lat: p.lat, lon: p.lon,
@@ -115,6 +125,7 @@ export async function runPass(
   loop.start();
 
   const errs: number[] = [];
+  const along: number[] = [];
   const frac: number[] = [];
   let inFrame = 0;
   const DT = 50;
@@ -128,6 +139,16 @@ export async function runPass(
     const truth = azElFromSite(site, predictGeo(kin, (Date.now() - t0) / 1000));
     if (truth.elDeg < 20 || ms < 8000) continue; // settle + clear sky only
     const axis = worldFromMount({ panDeg: sim.panDeg, tiltDeg: sim.tiltDeg }, cfg.tracker.mount);
+    {
+      const t1 = azElFromSite(site, predictGeo(kin, (Date.now() - t0) / 1000 + 0.2));
+      const c = Math.cos((truth.elDeg * Math.PI) / 180);
+      const vx = (((t1.azDeg - truth.azDeg + 540) % 360) - 180) / 0.2 * c;
+      const vy = (t1.elDeg - truth.elDeg) / 0.2;
+      const ox = (((truth.azDeg - axis.azDeg + 540) % 360) - 180) * c;
+      const oy = truth.elDeg - axis.elDeg;
+      const v2 = vx * vx + vy * vy;
+      if (v2 > 0.25) along.push((ox * vx + oy * vy) / v2);
+    }
     const err = angularSepDeg(axis.azDeg, axis.elDeg, truth.azDeg, truth.elDeg);
     const hfov = hfovAt(cfg.tracker, sim.zoom);
     errs.push(err);
@@ -149,6 +170,7 @@ export async function runPass(
     inFrame: errs.length ? inFrame / errs.length : 0,
     errFrameP95: q(frac, 0.95),
     events,
+    alongSec: q(along, 0.5),
   };
 }
 
