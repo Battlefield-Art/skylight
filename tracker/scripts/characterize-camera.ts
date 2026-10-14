@@ -97,7 +97,7 @@ try {
   const patch = {
     tracker: {
       camera: {
-        model: `${cfg.camera.model.split(" (")[0]} (characterized ${new Date().toISOString().slice(0, 10)})`,
+        characterized: `characterize-camera.ts ${new Date().toISOString().slice(0, 10)} (zooms ${ZOOMS.join(",")})`,
         speedSurface: surface,
         ...(travel ? { lens: { ...cfg.camera.lens, travelUnitsPerSec: Math.round(travel) } } : {}),
       },

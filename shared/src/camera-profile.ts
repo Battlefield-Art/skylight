@@ -14,8 +14,10 @@ export interface SpeedRow {
 }
 
 export interface CameraProfile {
-  /** Free text: model + when/how it was characterized. */
+  /** Display name of the camera (shown in the pass archive). */
   model: string;
+  /** When / how the profile was measured (free text). */
+  characterized?: string;
   /**
    * Sustained drive rate for each speed setting, at several zooms (cameras
    * that scale speed with zoom need more than one row). Settings are the
@@ -241,7 +243,8 @@ const TONGVEO_SPEED_SURFACE: SpeedRow[] = [
 ];
 
 export const TONGVEO_PROFILE: CameraProfile = {
-  model: "TONGVEO VISCA-over-IP 20× (speed surface 2026-06-10/2026-10-10/2026-10-14)",
+  model: "TONGVEO 20x PTZ",
+  characterized: "VISCA speed surface 2026-06-10 / 2026-10-10 / 2026-10-14 (stops 1260, 1385)",
   speedSurface: TONGVEO_SPEED_SURFACE,
   absolute: {
     // Absolute moves flat out (pan 0x18 / tilt 0x14, the maxima) except long

@@ -3,7 +3,7 @@
 // docs/pass-archive.md defines them. No I/O and no clocks — every metric
 // here is unit-tested on a synthetic series (tracker/test/passes-summary).
 
-import type { Aircraft } from "@shared/index.js";
+import type { Aircraft, MountModel } from "@shared/index.js";
 import { passGeometry } from "./geometry.js";
 import type { PassQuality } from "./quality.js";
 
@@ -112,6 +112,25 @@ export interface PassCamera {
   codec?: string | null;
 }
 
+/**
+ * Schema 1.4: the install's setup when the pass was recorded — everything a
+ * viewer (e.g. the 3D replay) needs to reconstruct the geometry for ANY
+ * install: the mount model (pose → world direction, any lean), the head's
+ * limits and surveyed skyline, and the lens table. Angles and directions
+ * only — nothing here locates the camera (no site coordinates).
+ */
+export interface PassSetup {
+  mount: MountModel;
+  limits: { panMinDeg: number; panMaxDeg: number; tiltMinDeg: number; tiltMaxDeg: number };
+  /** Clear-sky skyline: world az → lowest usable elevation, deg. */
+  horizon: { azDeg: number; minElDeg: number }[];
+  /** Lens: zoom units → horizontal FOV, and the zoom stops in use. */
+  fovLut: { units: number; hfovDeg: number }[];
+  zoomStopUnits: number[];
+  /** Camera profile model string (tracker.camera.model). */
+  cameraModel: string;
+}
+
 export interface PassMedia {
   clip: string | null;
   poster: string | null;
@@ -181,6 +200,8 @@ export interface PassJson {
   build: PassBuild;
   tuning: PassTuning;
   camera: PassCamera;
+  /** Schema 1.4 (optional for older passes). */
+  setup?: PassSetup;
   license: string;
   media: PassMedia;
   /** Schema 1.1: beauty shot + score (quality.ts); null when not scored. */
@@ -210,6 +231,7 @@ export interface PassInput {
   build: PassBuild;
   tuning: PassTuning;
   camera: PassCamera;
+  setup?: PassSetup;
   media: PassMedia;
   notes?: string[];
   /** Longest lens-stuck stretch seen during the pass, s (null = none). */
@@ -496,6 +518,7 @@ export function buildPass(input: PassInput): PassJson {
     build: input.build,
     tuning: input.tuning,
     camera: input.camera,
+    ...(input.setup ? { setup: input.setup } : {}),
     license: PASS_LICENSE,
     media: {
       ...input.media,
