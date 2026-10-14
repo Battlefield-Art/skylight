@@ -332,6 +332,8 @@ export class ControlLoop {
   private lensMovingAt = 0;
   /** Which rule set the zoom on the last tick (diagnostics). */
   zoomWhy = "";
+  /** Why the ladder rung last changed (diagnostic suffix on zoomWhy). */
+  private ladderWhy = "";
   /** Targets dropped for a challenger, hex → until (see selectTarget). */
   private targetCooldown = new Map<string, number>();
   /** Bias-innovation gate: consecutive frames whose measured bias disagrees
@@ -1256,6 +1258,7 @@ export class ControlLoop {
             if (lensSettled && this.ladderIdx > 0 && now - Math.max(this.lastLadderAt, settledFrom) > LADDER_DEMOTE_AFTER_MS) {
               this.ladderIdx--;
               this.lastLadderAt = now;
+              this.ladderWhy = "<lost";
             }
           } else {
             // SEARCH (nothing seen yet, or lost for a while): a small or
@@ -1277,9 +1280,11 @@ export class ControlLoop {
             if (this.ladderIdx > startRung) {
               this.ladderIdx = startRung;
               this.lastLadderAt = now;
+              this.ladderWhy = "<search";
             } else if (settled && startRung > this.ladderIdx) {
               this.ladderIdx = startRung;
               this.lastLadderAt = now;
+              this.ladderWhy = ">search";
             }
           }
         } else if (
@@ -1303,6 +1308,7 @@ export class ControlLoop {
           this.ladderIdx += rungs;
           this.lastLadderAt = now;
           this.visionGoodSince = 0; // earn the next rung from scratch
+          this.ladderWhy = ">lock";
         } else if (
           this.ladderIdx > 0 &&
           this.visionBadSince > 0 &&
@@ -1316,22 +1322,25 @@ export class ControlLoop {
           this.ladderIdx--;
           this.lastLadderAt = now;
           this.visionBadSince = now; // one rung per stretch
+          this.ladderWhy = this.lastResidFrac > 0.6 ? "<offc" : "<motion";
         }
         const ladderHfov = wideHfov * Math.pow(RUNG, this.ladderIdx);
         if (ladderHfov > zoom.hfovDeg) {
           zoom.hfovDeg = ladderHfov;
           zoom.zoomUnits = zoomUnitsFromHfov(ladderHfov, cfg.zoom.fovLut);
-          this.zoomWhy = `ladder${this.ladderIdx}`;
+          this.zoomWhy = `ladder${this.ladderIdx}${this.ladderWhy}`;
         } else {
           // Ladder has reached the ADS-B framing — clamp the rung so a later
           // demotion starts from here, not from rungs banked beyond it.
           // (ceil, not round: the rung must stay AT or inside the framing.
           // Rounding sent a 4.1° framing back to the 5.2° rung, so with
           // zoom.minHfovDeg 4.1 the lens never got past the 5.04° stop.)
-          this.ladderIdx = Math.max(
+          const clamped = Math.max(
             0,
             Math.ceil(Math.log(zoom.hfovDeg / wideHfov) / Math.log(RUNG) - 1e-6),
           );
+          if (clamped !== this.ladderIdx) this.ladderWhy = clamped < this.ladderIdx ? "<clamp" : ">clamp";
+          this.ladderIdx = clamped;
         }
       }
       // Motor-smoothness floor: the dither's velocity steps are fixed in
