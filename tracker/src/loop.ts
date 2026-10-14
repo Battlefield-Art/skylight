@@ -2058,6 +2058,8 @@ export class ControlLoop {
       // tracker (below) still arbitrates which residual is the plane.
       const cur = await decodeLuma(frame);
       let cands: Detection[] = [];
+      let silTried = false;
+      let silFound = false;
       const prev = this.prevLuma;
       const prevAim = this.prevAim;
       if (prev && prevAim && prev.length === cur.length) {
@@ -2125,7 +2127,9 @@ export class ControlLoop {
           const near = cands.some((c) => Math.hypot((c.cx - exX) * VISION_W, (c.cy - exY) * VISION_H) < 30);
           if (!near) {
             const sil = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx));
+            silTried = true;
             if (sil && sil.areaPx >= 4) {
+              silFound = true;
               cands.push({
                 cx: sil.cx, cy: sil.cy, areaPx: sil.areaPx, contrastSigma: 6,
                 box: sil.box, score: 6,
@@ -2224,6 +2228,21 @@ export class ControlLoop {
       const lt = sel?.track ?? null;
       const freshLock = lt != null && lt.lastSeen === frameT; // updated THIS frame
       this.lockMotionOk = sel?.motionOk ?? false;
+      if (!freshLock && this.current) {
+        // Why a frame had no lock (session recordings only): the plane can sit
+        // centred and plainly visible for seconds without one (EJM450
+        // 2026-10-14 35-42 s, 82σ against the sky).
+        const near = cands.reduce(
+          (m, c) => Math.min(m, Math.hypot((c.cx - exX) * VISION_W, (c.cy - exY) * VISION_H)), Infinity);
+        this.recorder.write("visionMiss", {
+          hfov: hfovF, exX, exY, nCands: cands.length, nearPx: Number.isFinite(near) ? near : null,
+          silTried, silFound, aimRateDps,
+          sel: sel ? {
+            hits: sel.track.hits, ageMs: frameT - sel.track.lastSeen, eligible: sel.eligible,
+            velErrDps: sel.velErrDps, posErrDeg: sel.posErrDeg, motionOk: sel.motionOk,
+          } : null,
+        });
+      }
 
       if (lt && freshLock) {
         const o = lt.latest();
