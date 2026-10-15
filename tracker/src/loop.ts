@@ -104,9 +104,15 @@ const LM_AZIMUTHS = [15, 60, 105, 150, 195, 240, 285, 330];
 const WRAP_REARM_MS = 4000;
 /** Drift fold-in from per-pass vision bias (foldPassBias). */
 const BIAS_FOLD_PASSES = 3;
-const BIAS_FOLD_MIN_DEG = 0.6;
+const BIAS_FOLD_MIN_DEG = 0.3;
 const BIAS_FOLD_MAX_SPREAD = 0.8;
 const BIAS_FOLD_GAIN = 0.5;
+/** A fold in the same direction as the previous one (within this window)
+ *  is a ramp — the head's tilt zero slipping +8.5° in 3 h on 2026-10-15 —
+ *  not an over-reaction: fold all of it. Half gain plus a 0.6° dead zone
+ *  left a standing 0.6-1° error behind the slip (corrEl −0.5…−1° on every
+ *  pass), most of the half-frame height at tele. */
+const BIAS_FOLD_RAMP_MS = 30 * 60_000;
 /** Vision bias-correction clamp, deg. The estimator measures an exogenous
  *  ADS-B-vs-mount offset directly (no plant feedback), so it cannot wind up;
  *  the clamp only bounds the damage of a wrong lock. It was 12° so a stale
@@ -850,6 +856,9 @@ export class ControlLoop {
   private leadLearn = new LeadLearner();
   private biasSampleAt = 0;
   /** Recent passes' median corrections, newest last. */
+  /** Direction and time of the last fold per axis (ramp detection). */
+  private lastFoldAz: { sign: number; t: number } | null = null;
+  private lastFoldEl: { sign: number; t: number } | null = null;
   private biasHistory: { az: number; el: number; t: number }[] = [];
 
   /**
@@ -896,8 +905,14 @@ export class ControlLoop {
     // Damped: the bias responded ~2x to each fold on 2026-10-11 (−1.64° moved
     // it −3.3°, +1.52° moved it +2.5°), so full folds oscillated. Half a
     // fold converges whether the true gain is 1 or 2.
-    const dAz = BIAS_FOLD_GAIN * fold(last.map((h) => h.az));
-    const dEl = BIAS_FOLD_GAIN * fold(last.map((h) => h.el));
+    const gain = (v: number, prev: { sign: number; t: number } | null) =>
+      v !== 0 && prev && prev.sign === Math.sign(v) && now - prev.t < BIAS_FOLD_RAMP_MS ? 1 : BIAS_FOLD_GAIN;
+    const fAz = fold(last.map((h) => h.az));
+    const fEl = fold(last.map((h) => h.el));
+    const dAz = gain(fAz, this.lastFoldAz) * fAz;
+    const dEl = gain(fEl, this.lastFoldEl) * fEl;
+    if (fAz !== 0) this.lastFoldAz = { sign: Math.sign(fAz), t: now };
+    if (fEl !== 0) this.lastFoldEl = { sign: Math.sign(fEl), t: now };
     if (dAz === 0 && dEl === 0) return;
     const m = cfg.mount;
     const next = { ...m, panOffsetDeg: m.panOffsetDeg - dAz, tiltOffsetDeg: m.tiltOffsetDeg - dEl };
