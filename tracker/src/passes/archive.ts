@@ -387,6 +387,13 @@ export class PassArchive {
         })
       : null;
     if (clip?.error) this.fail(`clip ${s.id}: ${clip.error}`);
+    // A pass is footage: with a video source but nothing captured (camera
+    // unplugged / off the roof, stream down) there is nothing to archive.
+    if (s.clip && !clip?.path) {
+      await rm(dir, { recursive: true, force: true });
+      console.log(`[passes] discard ${s.id}: ${durationSec.toFixed(1)}s, no video (${reason})`);
+      return;
+    }
     if (clip?.startWallMs != null) clipOffsetSec = (clip.startWallMs - s.startedAt) / 1000;
 
     const cfg = this.opts.config();

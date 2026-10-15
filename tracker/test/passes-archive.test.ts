@@ -100,6 +100,19 @@ describe("PassArchive", () => {
     expect(existsSync(join(dir, "20261010T235405Z-a622bc"))).toBe(false);
   });
 
+  it("discards a pass when the video source captured nothing (camera down)", async () => {
+    await archive.stop();
+    archive = new PassArchive({
+      ...(archive as unknown as { opts: ConstructorParameters<typeof PassArchive>[0] }).opts,
+      source: { tap: () => () => {}, init: () => null },
+    });
+    archive.onLoopEvent({ kind: "target", t: clock, hex: "a622bc" });
+    run(15);
+    archive.onLoopEvent({ kind: "target", t: clock, hex: null });
+    await archive.stop();
+    expect(existsSync(join(dir, "20261010T235405Z-a622bc"))).toBe(false);
+  });
+
   it("records, derives lock/zoom events, enriches the aircraft, finalizes and enqueues", async () => {
     archive.onLoopEvent({ kind: "target", t: clock, hex: "a622bc" });
     run(12, (i) => {
