@@ -2,6 +2,9 @@
 // the camera profile (test/sim). Pointing accuracy on a close overhead pass,
 // on the tilted mount the camera actually sits on and on a level one.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { angularSepDeg } from "@shared/index.js";
+import { visibleBodies } from "../src/calibration/session.js";
+import { SUN_MARGIN_DEG, sunKeepOutDeg } from "../src/pointing/sun.js";
 import { DEFAULT_HEAD, baseTracker, runPass, type Flight } from "./sim/run-pass.js";
 
 // UAL875 (2026-10-14): 777 departure heading 297° at 191 kt, climbing
@@ -74,6 +77,51 @@ describe("loop simulation: tick rate", () => {
       console.log(`${name} tick 67: ${JSON.stringify(fast)}\n${name} tick 140: ${JSON.stringify(slow)}`);
       expect(Math.abs(slow.alongSec - fast.alongSec)).toBeLessThan(0.25);
       expect(slow.errP50).toBeLessThan(fast.errP50 * 1.5 + 0.1);
+    }, 60_000);
+  }
+});
+
+// Sun keep-out (pointing/sun.ts): the sun is never inside the picture + margin
+// on any tick; near it the camera stays zoomed in, and when even tele can't
+// keep it out the aim holds at the edge and resumes past it.
+describe("loop simulation: passing the sun", () => {
+  // 10:30 PDT: sun SE (az ~145°, el ~38°), clear of the wedge mount's pan blind
+  // spot (~201-216°, where a crossing would test the wrap logic instead).
+  const AT = new Date("2026-10-14T17:30:00Z");
+  for (const [name, offsetDeg] of [["9° from the sun", 9], ["3° from the sun", 3]] as const) {
+    it(`plane passing ${name}`, async () => {
+      const t = baseTracker();
+      const sun = visibleBodies(t.site, AT.getTime() + 30_000, -5).find((b) => b.name === "Sun")!;
+      // Mid-pass the plane is `offsetDeg` above the sun, 7 km out, crossing it.
+      const d = 7000, a = (sun.azDeg * Math.PI) / 180, e = ((sun.elDeg + offsetDeg) * Math.PI) / 180;
+      const midE = d * Math.cos(e) * Math.sin(a), midN = d * Math.cos(e) * Math.cos(a), up = d * Math.sin(e);
+      const gs = 220, v = (gs * 1852) / 3600, track = (sun.azDeg + 90) % 360, tr = (track * Math.PI) / 180;
+      const flight: Flight = {
+        startEastM: midE - v * 30 * Math.sin(tr), startNorthM: midN - v * 30 * Math.cos(tr), altM: up + t.site.altM,
+        gsKt: gs, trackDeg: track, durationSec: 60, adsbDelaySec: 0.3,
+      };
+      const margin = t.target.sunMarginDeg ?? SUN_MARGIN_DEG;
+      let worst = Infinity, minSep = Infinity, nearSun = 0, nearSunInFrame = 0;
+      const m = await runPass(t, flight, DEFAULT_HEAD, undefined, {
+        at: AT,
+        onSample: (s) => {
+          if (s.tSec < 6) return; // initial slew from park
+          const sNow = visibleBodies(t.site, Date.now(), -5).find((b) => b.name === "Sun")!;
+          const sep = angularSepDeg(s.axis.azDeg, s.axis.elDeg, sNow.azDeg, sNow.elDeg);
+          minSep = Math.min(minSep, sep);
+          worst = Math.min(worst, sep - sunKeepOutDeg(s.hfov, 0)); // ≥ 0: sun outside the frame
+          const pSep = angularSepDeg(s.truth.azDeg, s.truth.elDeg, sNow.azDeg, sNow.elDeg);
+          if (pSep < 15) {
+            nearSun++;
+            if (angularSepDeg(s.axis.azDeg, s.axis.elDeg, s.truth.azDeg, s.truth.elDeg) < s.hfov / 2) nearSunInFrame++;
+          }
+        },
+      });
+      console.log(`${name}: sun clearance beyond the frame min ${worst.toFixed(2)}° (margin ${margin}), axis-sun min ${minSep.toFixed(2)}°, plane in frame near the sun ${nearSunInFrame}/${nearSun}, ${JSON.stringify(m)}`);
+      expect(worst).toBeGreaterThan(margin - 1); // never in the picture; ≤1° of the margin used by head lag
+      expect(nearSun).toBeGreaterThan(50);
+      if (offsetDeg >= 9) expect(nearSunInFrame / nearSun).toBeGreaterThan(0.9); // filmed zoomed-in right past the sun
+      expect(m.inFrame).toBeGreaterThan(offsetDeg >= 9 ? 0.9 : 0.5);
     }, 60_000);
   }
 });

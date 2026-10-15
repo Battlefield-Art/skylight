@@ -59,6 +59,7 @@ import { parkLimits, planPass, zenithHold, ZENITH_MIN_HFOV } from "./pointing/pl
 import { predictAim, TrackHistory, type Prediction } from "./pointing/predict.js";
 import { selectTarget, type CurrentTarget } from "./pointing/target.js";
 import { chooseZoom, snapToStop, speedFloorHfov, zoomStopsHfov } from "./pointing/zoom.js";
+import { SUN_MARGIN_DEG, maxHfovForSun, pushAimFromSun, sunKeepOutDeg, sunSepDeg } from "./pointing/sun.js";
 import { distanceBand, FocusController } from "./camera/focus.js";
 import { nextPlane, type NextPlane } from "./pointing/nextPass.js";
 import { decodeLuma, VISION_W, VISION_H, type Detection } from "./vision/detect.js";
@@ -252,6 +253,10 @@ export class ControlLoop {
   /** Idle ready-position state. */
   private lastTargetAt = 0;
   private atHome = false;
+  /** Where the idle park last went (re-parked when the sun guard moves it). */
+  private homeAim: { azDeg: number; elDeg: number } | null = null;
+  /** The aim is held at the sun keep-out boundary this tick (pointing/sun.ts). */
+  private sunHeld = false;
   /** Snapshot of the camera options the live driver was built with. */
   private driverOptsKey: string | null = null;
   /** Last commanded velocity rates (direction-flip hysteresis + accel cap). */
@@ -615,7 +620,7 @@ export class ControlLoop {
             this.upstream.getAircraft(), cfg.site, now, cfg.target, cfg.limits.horizon,
             this.current,
             cfg.target.departurePriority === false ? null : (this.upstream.getConfig().airport ?? DEFAULT_CONFIG.airport),
-            this.sunAt(cfg.site, now),
+            this.sunForSelection(cfg, now),
             cfg.targetMode,
             this.targetCooldown,
           ),
@@ -647,6 +652,36 @@ export class ControlLoop {
   }
 
   /** Sun direction, refreshed every 30 s (it moves ~0.25°/min). */
+  /** The idle park direction, kept out of the sun's way for the wide lens
+   *  it parks at (a morning sun sits right over the airport bearing). */
+  private homeAimNow(cfg: TrackerConfig, now: number): { azDeg: number; elDeg: number } {
+    const azDeg =
+      cfg.home.mode === "sfo" // "face the configured airport" (named for the first site)
+        ? azElFromSite(cfg.site, { ...(this.upstream.getConfig().airport ?? DEFAULT_CONFIG.airport), altM: cfg.site.altM }).azDeg
+        : cfg.home.azDeg;
+    const sun = this.sunAt(cfg.site, now);
+    if (!sun) return { azDeg, elDeg: cfg.home.elDeg };
+    const wide = hfovFromZoomUnits(cfg.units.zoomWideUnits, cfg.zoom.fovLut);
+    const g = pushAimFromSun({ azDeg, elDeg: cfg.home.elDeg }, sun, sunKeepOutDeg(wide, cfg.target.sunMarginDeg ?? SUN_MARGIN_DEG));
+    return { azDeg: g.azDeg, elDeg: g.elDeg };
+  }
+
+  /** The sun has moved the guarded park direction by more than a degree. */
+  private homeMoved(cfg: TrackerConfig, now: number): boolean {
+    if (!this.homeAim) return false;
+    const h = this.homeAimNow(cfg, now);
+    return sunSepDeg(h, { azDeg: this.homeAim.azDeg, elDeg: this.homeAim.elDeg }) > 1;
+  }
+
+  /** The sun with the separation inside which no zoom keeps it out of the
+   *  picture — planes closer than that can't be filmed (pointing/sun.ts). */
+  private sunForSelection(cfg: TrackerConfig, now: number): { azDeg: number; elDeg: number; keepOutDeg: number } | null {
+    const sun = this.sunAt(cfg.site, now);
+    if (!sun) return null;
+    const tele = Math.min(...cfg.zoom.fovLut.map((p) => p.hfovDeg));
+    return { ...sun, keepOutDeg: sunKeepOutDeg(tele, cfg.target.sunMarginDeg ?? SUN_MARGIN_DEG) };
+  }
+
   private sunAt(site: GeoPoint, now: number): { azDeg: number; elDeg: number } | null {
     if (!this.sunCache || now - this.sunCache.t > 30_000) {
       const sun = visibleBodies(site, now, -5).find((b) => b.name === "Sun");
@@ -960,7 +995,7 @@ export class ControlLoop {
       undefined,
       undefined,
       cfg.limits.horizon,
-      this.sunAt(cfg.site, now),
+      this.sunForSelection(cfg, now),
       cfg.target.departurePriority === false ? null : (this.upstream.getConfig?.()?.airport ?? DEFAULT_CONFIG.airport),
       this.targetCooldown,
     );
@@ -1153,6 +1188,22 @@ export class ControlLoop {
         // the detector — CES590 (777, in frame from ~12 s) first locked at 18 s.
         const rising = (prediction?.elRateDps ?? 0) > 0.2;
         if (el < skyline || (rising && el < waitEl)) el = Math.max(el, waitEl);
+      }
+      // Sun keep-out (pointing/sun.ts): the aim comes no closer to the sun
+      // than keeps it out of the picture the lens is ACTUALLY giving — it may
+      // still be zooming in; the zoom cap below pulls the lens in first.
+      const planeAim = { azDeg: az, elDeg: el };
+      const sunNow = this.sunAt(cfg.site, now);
+      const sunMargin = cfg.target.sunMarginDeg ?? SUN_MARGIN_DEG;
+      this.sunHeld = false;
+      if (sunNow) {
+        const lensHfov = hfovFromZoomUnits(d.getPose()?.zoomUnits ?? cfg.units.zoomWideUnits, cfg.zoom.fovLut);
+        const g = pushAimFromSun(planeAim, sunNow, sunKeepOutDeg(Math.max(lensHfov, this.zoomCmdHfov ?? 0), sunMargin));
+        if (g.pushed) {
+          az = g.azDeg;
+          el = g.elDeg;
+          this.sunHeld = true;
+        }
       }
       const pt = mountFromWorld(az, el, cfg.mount);
       // Pan dead-zone anticipation (see WRAP_SLEW_DPS).
@@ -1471,6 +1522,20 @@ export class ControlLoop {
           zoom.zoomUnits = zoomUnitsFromHfov(stop, cfg.zoom.fovLut);
         }
       }
+      // Sun keep-out: never wider than keeps the sun out of the picture
+      // around the PLANE (the aim follows once the lens is in) — overrides
+      // every floor, the debounce and the stop snap (largest stop that fits).
+      if (sunNow) {
+        const stops = zoomStopsHfov(cfg.zoom); // ascending: tele first
+        const cap = Math.max(stops[0], maxHfovForSun(sunSepDeg(planeAim, sunNow), sunMargin));
+        if (zoom.hfovDeg > cap) {
+          const fit = [...stops].reverse().find((h) => h <= cap) ?? stops[0];
+          zoom.hfovDeg = fit;
+          zoom.zoomUnits = zoomUnitsFromHfov(fit, cfg.zoom.fovLut);
+          this.zoomCmdHfov = fit;
+          this.zoomWhy += "+sun";
+        }
+      }
       hfovDeg = zoom.hfovDeg;
       angular = zoom.angularSizeDeg;
       commandedPanTilt = pt;
@@ -1655,8 +1720,10 @@ export class ControlLoop {
         // The vision correction's glide is in world az/el: map it through
         // the lean too (the trackers are already in head axes).
         const corrFf = mountRatesFromWorld(az, el, corrAzRateDps, corrElRateDps, cfg.mount);
-        const ffPan = this.azTracker.rate / cfg.mount.panGain + corrFf.panDps;
-        const ffTilt = this.elTracker.rate / cfg.mount.tiltGain + corrFf.tiltDps;
+        // Held at the sun keep-out edge: the plane's own motion must not carry
+        // the head inside it — position control only until the plane is clear.
+        const ffPan = this.sunHeld ? 0 : this.azTracker.rate / cfg.mount.panGain + corrFf.panDps;
+        const ffTilt = this.sunHeld ? 0 : this.elTracker.rate / cfg.mount.tiltGain + corrFf.tiltDps;
         let panRate = ffPan + KP * this.errPanLP + this.panRateI;
         let tiltRate = ffTilt + KP * this.errTiltLP + this.tiltRateI;
         // Latency-aware braking on the CATCH-UP part of the command: a head
@@ -1813,19 +1880,17 @@ export class ControlLoop {
     } else if (
       this.mode === "auto" &&
       cfg.home.enabled &&
-      !this.atHome &&
-      now - this.lastTargetAt > cfg.home.afterSec * 1000
+      now - this.lastTargetAt > cfg.home.afterSec * 1000 &&
+      (!this.atHome || this.homeMoved(cfg, now))
     ) {
-      const azDeg =
-        cfg.home.mode === "sfo" // "face the configured airport" (named for the first site)
-          ? azElFromSite(cfg.site, { ...(this.upstream.getConfig().airport ?? DEFAULT_CONFIG.airport), altM: cfg.site.altM }).azDeg
-          : cfg.home.azDeg;
-      const pt = mountFromWorld(azDeg, cfg.home.elDeg, cfg.mount);
+      const { azDeg, elDeg } = this.homeAimNow(cfg, now);
+      const pt = mountFromWorld(azDeg, elDeg, cfg.mount);
+      this.homeAim = { azDeg, elDeg };
       this.atHome = true;
       this.lastAbsolute = null;
       this.driver().gotoAbsolute({ ...pt, zoomUnits: cfg.units.zoomWideUnits });
       this.driver().setFocusInfinity(false); // wide + idle -> autofocus
-      this.recorder.write("home", { azDeg, elDeg: cfg.home.elDeg });
+      this.recorder.write("home", { azDeg, elDeg });
     }
 
     // No target: hand focus back to AF (on the scenery, wide) so the next

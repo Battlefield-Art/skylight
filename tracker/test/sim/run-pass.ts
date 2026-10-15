@@ -77,25 +77,35 @@ export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
  *  live loop's half-speed setpoint into a fake feed delay. */
 export const ADSB_DELAY_SEC = 0.3;
 
-/** Live control-loop tick period while tracking, ms (2026-10-14 session:
- *  median 139-142 ms, ~7.6-8.2 Hz, although commandHz is 15). */
-export const LIVE_TICK_MS = 140;
+/** Live control-loop tick period while tracking, ms: ~67 since build n
+ *  (2026-10-14 18:25 PDT; before it, vision load held it at ~140). */
+export const LIVE_TICK_MS = 67;
 
 export const DEFAULT_HEAD: HeadOptions = { panLatencySec: 0.4, tiltLatencySec: 0.4, poseLagSec: 0.18 };
 
 export interface RunOptions {
-  /** Real control-loop tick period, ms. Live, the loop ticks every ~140 ms
-   *  while tracking (vision load) although commandHz asks for 15 Hz. */
+  /** Real control-loop tick period, ms (live: ~67 ms since build n, ~140 ms
+   *  before — vision load). */
   tickMs?: number;
+  /** Wall-clock instant the pass starts at (the sun depends on it). Default:
+   *  a fixed night-time instant, so scenarios don't depend on when tests run. */
+  at?: Date;
+  /** Called every simulation step with the camera axis, the true plane
+   *  direction and the lens field of view. */
+  onSample?: (s: { tSec: number; axis: { azDeg: number; elDeg: number }; truth: { azDeg: number; elDeg: number }; hfov: number }) => void;
 }
+
+/** Default start instant: 03:00 PDT, sun well below the horizon. */
+export const NIGHT = new Date("2026-10-14T10:00:00Z");
 
 export async function runPass(
   tracker: TrackerConfig,
   flight: Flight,
   head: HeadOptions = DEFAULT_HEAD,
   profile?: CameraProfile,
-  opts: RunOptions = { tickMs: LIVE_TICK_MS },
+  opts: RunOptions = {},
 ): Promise<PassMetrics> {
+  vi.setSystemTime(opts.at ?? NIGHT);
   vi.stubEnv("SKYLIGHT_TRACKER_DATA", mkdtempSync(join(tmpdir(), "skylight-sim-")));
   const { ControlLoop } = await import("../../src/loop.js");
   const cfg: Config = { ...DEFAULT_CONFIG, tracker: { ...tracker, camera: profile ?? tracker.camera } };
@@ -141,10 +151,11 @@ export async function runPass(
   loop.manualTarget("sim001");
   sim.driver.start();
   loop.start();
-  if (opts.tickMs) {
+  const tickMs = opts.tickMs ?? LIVE_TICK_MS;
+  if (tickMs) {
     const l = loop as unknown as { timer: ReturnType<typeof setInterval> | null; tick(): void };
     if (l.timer) clearInterval(l.timer);
-    l.timer = setInterval(() => l.tick(), opts.tickMs);
+    l.timer = setInterval(() => l.tick(), tickMs);
   }
 
   const errs: number[] = [];
@@ -160,8 +171,9 @@ export async function runPass(
       loop.onSnapshot(Date.now(), [fix]);
     }
     const truth = azElFromSite(site, predictGeo(kin, (Date.now() - t0) / 1000));
-    if (truth.elDeg < 20 || ms < 8000) continue; // settle + clear sky only
     const axis = worldFromMount({ panDeg: sim.panDeg, tiltDeg: sim.tiltDeg }, cfg.tracker.mount);
+    opts.onSample?.({ tSec: ms / 1000, axis, truth, hfov: hfovAt(cfg.tracker, sim.zoom) });
+    if (truth.elDeg < 20 || ms < 8000) continue; // settle + clear sky only
     {
       const t1 = azElFromSite(site, predictGeo(kin, (Date.now() - t0) / 1000 + 0.2));
       const c = Math.cos((truth.elDeg * Math.PI) / 180);
