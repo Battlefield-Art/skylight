@@ -24,6 +24,13 @@ export interface CameraProfile {
    * protocol's speed values (VISCA bytes); the first row is the widest zoom.
    */
   speedSurface: SpeedRow[];
+  /**
+   * A running drive keeps the speed it was commanded at while the lens
+   * moves (the speed is LATCHED when the command arrives); false = the
+   * camera re-scales a running drive as the zoom changes. Default true.
+   * Measure with tracker/scripts/probe-speed-zoomchange.ts.
+   */
+  speedLatched?: boolean;
   /** Absolute moves: speed settings used, and a slower pan setting for long
    *  slews (some heads miss steps when flung far at full speed). */
   absolute: {
@@ -246,6 +253,10 @@ export const TONGVEO_PROFILE: CameraProfile = {
   model: "TONGVEO 20x PTZ",
   characterized: "VISCA speed surface 2026-06-10 / 2026-10-10 / 2026-10-14 (stops 1260, 1385)",
   speedSurface: TONGVEO_SPEED_SURFACE,
+  // probe-speed-zoomchange.ts 2026-10-15, pan byte 2 for 3 s: wide 45.67°,
+  // tele 4.46°, started tele + zoomed to wide 4.50°, started wide + zoomed
+  // to tele 45.90° — the speed stays what it was at the command.
+  speedLatched: true,
   absolute: {
     // Absolute moves flat out (pan 0x18 / tilt 0x14, the maxima) except long
     // pan slews: the pan pointing jumped ~+2° across a ~300° wrap
