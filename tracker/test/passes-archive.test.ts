@@ -113,6 +113,24 @@ describe("PassArchive", () => {
     expect(existsSync(join(dir, "20261010T235405Z-a622bc"))).toBe(false);
   });
 
+  it("discards a pass whose plane never rose above the skyline", async () => {
+    state.target.predicted = { azDeg: 120, elDeg: 3, slantM: 8000 }; // below a 10° roofline
+    await archive.stop();
+    archive = new PassArchive({
+      ...(archive as unknown as { opts: ConstructorParameters<typeof PassArchive>[0] }).opts,
+      config: () => ({
+        ...DEFAULT_CONFIG.tracker,
+        limits: { ...DEFAULT_CONFIG.tracker.limits, horizon: [{ azDeg: 0, minElDeg: 10 }, { azDeg: 180, minElDeg: 10 }] },
+        zoom: { ...DEFAULT_CONFIG.tracker.zoom, fovLut: [{ units: 0, hfovDeg: 56.5 }, { units: 1000, hfovDeg: 35 }] },
+      }),
+    });
+    archive.onLoopEvent({ kind: "target", t: clock, hex: "a622bc" });
+    run(15);
+    archive.onLoopEvent({ kind: "target", t: clock, hex: null });
+    await archive.stop();
+    expect(existsSync(join(dir, "20261010T235405Z-a622bc"))).toBe(false);
+  });
+
   it("records, derives lock/zoom events, enriches the aircraft, finalizes and enqueues", async () => {
     archive.onLoopEvent({ kind: "target", t: clock, hex: "a622bc" });
     run(12, (i) => {
