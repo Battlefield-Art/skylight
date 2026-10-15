@@ -34,3 +34,30 @@ describe("PositionCarry", () => {
     expect(fixAgeSec(a, 40_000)).toBeCloseTo(40, 3); // > posStaleSec (30): filtered as stale
   });
 });
+
+describe("PositionCarry: kinematics", () => {
+  it("a poll without a climb rate does not make a climbing departure 'level' (8 flickers on 2026-10-14)", () => {
+    const c = new PositionCarry();
+    c.apply([ac({ lat: 37.6, lon: -122.4, seenPos: 0, altBaro: 75, baroRate: 1088, track: 297, gs: 125, ts: 0 })], 0);
+    const [a] = c.apply([ac({ lat: 37.601, lon: -122.401, seenPos: 0, altBaro: 125, ts: 500 })], 500);
+    expect(a.baroRate).toBe(1088);
+    expect(a.track).toBe(297);
+    expect(a.altBaro).toBe(125); // a present value is never overwritten
+  });
+
+  it("holds a missing field at most 10 s", () => {
+    const c = new PositionCarry();
+    c.apply([ac({ lat: 37.6, lon: -122.4, baroRate: 1000, ts: 0 })], 0);
+    let a!: Aircraft;
+    for (let t = 1000; t <= 12_000; t += 1000) [a] = c.apply([ac({ lat: 37.6, lon: -122.4, ts: t })], t);
+    expect(a.baroRate == null).toBe(true);
+  });
+
+  it("an aircraft on the ground carries nothing", () => {
+    const c = new PositionCarry();
+    c.apply([ac({ lat: 37.6, lon: -122.4, baroRate: 1000, ts: 0 })], 0);
+    const [a] = c.apply([ac({ lat: 37.6, lon: -122.4, onGround: true, altBaro: null, ts: 500 })], 500);
+    expect(a.baroRate == null).toBe(true);
+    expect(a.altBaro).toBeNull();
+  });
+});
