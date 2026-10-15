@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Aircraft } from "@shared/index.js";
+import { azElFromSite, type Aircraft } from "@shared/index.js";
 import { findDeparture, selectTarget } from "../src/pointing/target.js";
 
 const site = { lat: 37.6357359, lon: -122.4122271, altM: -17.5 };
@@ -51,3 +51,22 @@ describe("selection hysteresis on the filters", () => {
     expect(selectTarget([low], site, now, { hex: "low", sinceMs: now - 5000 }, "closest", c2, 15, 30).hex).toBe("low");
   });
 });
+
+describe("sun keep-out and the current target", () => {
+  // A plane 1.5 km north of the site at 3000 ft flying east at 200 kt; the sun placed right on it.
+  const plane = ac({ hex: "p", lat: 37.649, lon: -122.4122, altGeom: 3000, altBaro: 3000, baroRate: 0, track: 90, gs: 200 });
+  const c2 = { ...crit, minElevationDeg: 5, maxRangeMi: 10 };
+  const ae = azElFromSite(site, { lat: 37.649, lon: -122.4122, altM: 3000 * 0.3048 });
+  const sunOn = { azDeg: ae.azDeg, elDeg: ae.elDeg, keepOutDeg: 7 };
+  it("drops a NEW plane inside the keep-out", () => {
+    expect(selectTarget([plane], site, now, null, "closest", c2, 15, 30, undefined, sunOn).hex).toBeNull();
+  });
+  it("keeps the CURRENT target while it is only passing the sun", () => {
+    expect(selectTarget([plane], site, now, { hex: "p", sinceMs: now - 9000 }, "closest", c2, 15, 30, undefined, sunOn).hex).toBe("p");
+  });
+  it("drops the current target that stays on the sun line", () => {
+    const parked = { ...plane, gs: 0 } as Aircraft;
+    expect(selectTarget([parked], site, now, { hex: "p", sinceMs: now - 9000 }, "closest", c2, 15, 30, undefined, sunOn).hex).toBeNull();
+  });
+});
+

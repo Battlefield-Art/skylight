@@ -9,6 +9,7 @@ import {
   fixAgeSec,
   horizonMinEl,
   msgAgeSec,
+  predictGeo,
   type Aircraft,
   type AzEl,
   type Candidate,
@@ -116,7 +117,14 @@ export function selectTarget(
     if (azEl.slantM > c.maxRangeMi * MI_TO_M * (1 + keep * KEEP_RANGE_FRAC)) continue;
     // (The aim guard keeps the sun out of the frame on its own; the margin
     // here only stops the target flickering at the selection boundary.)
-    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid - keep * KEEP_SUN_DEG) continue;
+    // The plane being filmed is KEPT while it is only passing the sun — the
+    // aim holds at the keep-out edge until it comes out (owner-approved
+    // design). Dropping it handed the camera to a far plane for the 20 s
+    // crossing and took it back after (N6695M 2026-10-15 12:57, 0% lock on
+    // the stand-in). Kept only if it is clear again SUN_PASS_SEC ahead.
+    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid - keep * KEEP_SUN_DEG) {
+      if (!keep || !clearOfSunSoon(ac, geo, site, sun, sunAvoid)) continue;
+    }
     const { s, note } = score(ac, azEl, mode, c);
     candidates.push({
       hex: ac.hex,
@@ -165,6 +173,21 @@ export function selectTarget(
     heldSec >= c.hysteresisSec &&
     best.score > cur.score + c.switchMargin;
   return { hex: challengerWins ? best.hex : cur.hex, candidates };
+}
+
+/** How far ahead a current target passing the sun must be clear again to keep it, s. */
+const SUN_PASS_SEC = 20;
+
+function clearOfSunSoon(
+  ac: Aircraft,
+  geo: GeoPoint,
+  site: GeoPoint,
+  sun: { azDeg: number; elDeg: number },
+  keepOutDeg: number,
+): boolean {
+  const kin = { lat: geo.lat, lon: geo.lon, altM: geo.altM, gsKt: ac.gs, trackDeg: ac.track, vRateFpm: ac.baroRate ?? 0 };
+  const ahead = azElFromSite(site, predictGeo(kin, SUN_PASS_SEC));
+  return angularSepDeg(ahead.azDeg, ahead.elDeg, sun.azDeg, sun.elDeg) >= keepOutDeg;
 }
 
 /** Margins the CURRENT target gets on the candidate filters (hysteresis). */
