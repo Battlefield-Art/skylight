@@ -749,6 +749,21 @@ export function requiredHfovDeg(
  * linearly interpolated around the circle. `fallback` when the survey is
  * empty or absent.
  */
+/** The horizon table sorted by azimuth, computed once per table: the vision
+ *  skyline mask asks ~14 000 times a frame, and re-sorting the table on every
+ *  call was a quarter of the tracker's CPU while tracking (2026-10-15 profile). */
+const sortedHorizons = new WeakMap<object, { az: number; el: number }[]>();
+function sortedHorizon(horizon: { azDeg: number; minElDeg: number }[]): { az: number; el: number }[] {
+  let pts = sortedHorizons.get(horizon);
+  if (!pts || pts.length !== horizon.length) {
+    pts = [...horizon]
+      .map((p) => ({ az: norm360(p.azDeg), el: p.minElDeg }))
+      .sort((a, b) => a.az - b.az);
+    sortedHorizons.set(horizon, pts);
+  }
+  return pts;
+}
+
 export function horizonMinEl(
   horizon: { azDeg: number; minElDeg: number }[] | undefined,
   azDeg: number,
@@ -756,9 +771,7 @@ export function horizonMinEl(
 ): number {
   if (!horizon || horizon.length === 0) return fallback;
   if (horizon.length === 1) return horizon[0].minElDeg;
-  const pts = [...horizon]
-    .map((p) => ({ az: norm360(p.azDeg), el: p.minElDeg }))
-    .sort((a, b) => a.az - b.az);
+  const pts = sortedHorizon(horizon);
   const az = norm360(azDeg);
   // Neighbours around the circle.
   let lo = pts[pts.length - 1];
