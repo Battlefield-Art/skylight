@@ -1005,10 +1005,11 @@ export class ControlLoop {
       // (null vs undefined: with no target at all this must NOT fire every
       // tick — it resets the setpoint/vision state and spams the recorder.)
       if ((hex ?? null) !== (this.current?.hex ?? null)) {
-        // Dropped while still trackable (a challenger won) → cooldown, so the
-        // two can't ping-pong. A target that simply left isn't penalised.
+        // Any plane that loses the camera to another → cooldown, so the two
+        // can't ping-pong — also one that only dropped out for a poll (on a
+        // filter threshold) and would otherwise re-take it on return.
         const prev = this.current?.hex;
-        if (prev && hex && selection.candidates.some((c) => c.hex === prev)) {
+        if (prev && hex) {
           this.targetCooldown.set(prev, now + TARGET_COOLDOWN_MS);
         }
         for (const [h, until] of this.targetCooldown) if (until <= now) this.targetCooldown.delete(h);

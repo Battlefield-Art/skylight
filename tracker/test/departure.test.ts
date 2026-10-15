@@ -28,4 +28,26 @@ describe("departure priority", () => {
     const sel = selectTarget([current, dep], site, now, { hex: "cur", sinceMs: now - 1000 }, "closest", crit, 15, 30, undefined, null, sfo);
     expect(sel.hex).toBe("dep");
   });
+
+  it("never treats a helicopter (rotorcraft category) as a departure", () => {
+    expect(findDeparture([ac({ hex: "heli", category: "A7", baroRate: 400 })], site, sfo, now)).toBeNull();
+  });
+
+  it("a departure that just lost the camera can't grab it back from a valid target", () => {
+    const current = ac({ hex: "cur", lat: 37.66, lon: -122.42, altGeom: 9000, altBaro: 9000, baroRate: 0, track: 180 });
+    const dep = ac({ hex: "dep" });
+    const cd = new Map([["dep", now + 30_000]]);
+    const sel = selectTarget([current, dep], site, now, { hex: "cur", sinceMs: now - 1000 }, "closest", crit, 15, 30, undefined, null, sfo, cd);
+    expect(sel.hex).toBe("cur");
+  });
+});
+
+describe("selection hysteresis on the filters", () => {
+  it("keeps the current target a little below the thresholds a new one must clear", () => {
+    // 450 ft is under minAltFt 500 for a newcomer, but the plane being filmed keeps its place.
+    const low = ac({ hex: "low", lat: 37.64, lon: -122.405, altGeom: 450, altBaro: 450, baroRate: 0, track: 90 });
+    const c2 = { ...crit, minAltFt: 500, minElevationDeg: 1 };
+    expect(selectTarget([low], site, now, null, "closest", c2, 15, 30).hex).toBeNull();
+    expect(selectTarget([low], site, now, { hex: "low", sinceMs: now - 5000 }, "closest", c2, 15, 30).hex).toBe("low");
+  });
 });

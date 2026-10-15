@@ -92,8 +92,14 @@ export function selectTarget(
 
   for (const ac of aircraft) {
     if (ac.onGround) continue;
+    // The plane being filmed keeps its place until it is clearly out: a
+    // plane sitting ON a threshold (500 ft, the skyline, 11°, the sun
+    // keep-out) dropped out and came back poll after poll, and each return
+    // re-took the camera from whatever had replaced it (N45EC at 500-675 ft
+    // 0.4 mi away, 2026-10-15: 11 target switches in 85 s).
+    const keep = current?.hex === ac.hex ? 1 : 0;
     const altFt = ac.altGeom ?? ac.altBaro;
-    if (altFt == null || altFt < c.minAltFt) continue;
+    if (altFt == null || altFt < c.minAltFt - keep * KEEP_ALT_FT) continue;
     // Still being heard, and the position not too old to dead-reckon: a
     // plane in the antenna's overhead null keeps sending velocity/altitude
     // while its position goes quiet for tens of seconds — worth following by
@@ -103,12 +109,14 @@ export function selectTarget(
     const geo = aircraftGeoPoint(ac);
     if (!geo) continue;
     const azEl = azElFromSite(site, geo);
-    if (azEl.elDeg < c.minElevationDeg) continue;
+    if (azEl.elDeg < c.minElevationDeg - keep * KEEP_EL_DEG) continue;
     // Per-azimuth clear-sky horizon (+1° so the frame's lower edge at tele
     // stays above the roofline/trees).
-    if (azEl.elDeg < horizonMinEl(horizon, azEl.azDeg, -90) + 1) continue;
-    if (azEl.slantM > c.maxRangeMi * MI_TO_M) continue;
-    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid) continue;
+    if (azEl.elDeg < horizonMinEl(horizon, azEl.azDeg, -90) + 1 - keep * KEEP_EL_DEG) continue;
+    if (azEl.slantM > c.maxRangeMi * MI_TO_M * (1 + keep * KEEP_RANGE_FRAC)) continue;
+    // (The aim guard keeps the sun out of the frame on its own; the margin
+    // here only stops the target flickering at the selection boundary.)
+    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid - keep * KEEP_SUN_DEG) continue;
     const { s, note } = score(ac, azEl, mode, c);
     candidates.push({
       hex: ac.hex,
@@ -130,7 +138,13 @@ export function selectTarget(
   // camera still parked on the previous plane). Pick it from lift-off, below
   // the skyline: the aim clamps to the skyline at its azimuth, so the camera
   // waits where it will rise into view.
-  const dep = airport ? findDeparture(aircraft, site, airport, now, staleSec, posStaleSec) : null;
+  // A departure on cooldown (it just lost the camera) can't grab it back
+  // while the current target is still valid.
+  const curValid = current != null && candidates.some((x) => x.hex === current.hex);
+  const dep = airport
+    ? findDeparture(aircraft, site, airport, now, staleSec, posStaleSec, (h) =>
+        h !== current?.hex && curValid && (cooldown?.get(h) ?? 0) > now)
+    : null;
   if (dep) {
     const has = candidates.find((x) => x.hex === dep.hex);
     if (!has) candidates.unshift(dep);
@@ -153,11 +167,23 @@ export function selectTarget(
   return { hex: challengerWins ? best.hex : cur.hex, candidates };
 }
 
+/** Margins the CURRENT target gets on the candidate filters (hysteresis). */
+const KEEP_ALT_FT = 300;
+const KEEP_EL_DEG = 2;
+const KEEP_RANGE_FRAC = 0.1;
+const KEEP_SUN_DEG = 1;
+
 /** Departure watch radius around the airport and toward the site, m. */
 const DEP_MAX_FROM_AIRPORT_M = 6000;
 const DEP_MAX_FROM_SITE_M = 6000;
 const DEP_MAX_ALT_FT = 3000;
+// (Lift-off polls report 200-600 ft/min — ITY641 A339 +320 — so this stays
+// low; the first climbing poll is the moment to pick a departure.)
 const DEP_MIN_CLIMB_FPM = 300;
+/** ADS-B emitter category of rotorcraft: a helicopter doesn't depart a
+ *  runway toward the site — N45EC (EC20) hovering at 550 ft 0.4 mi away
+ *  passed the departure test and took the camera from below the skyline. */
+const ROTORCRAFT_CATEGORY = "A7";
 /** Track must point within this of the bearing to the site, deg. */
 const DEP_HEADING_TOL_DEG = 35;
 
@@ -182,11 +208,13 @@ export function findDeparture(
   now: number,
   staleSec = 15,
   posStaleSec = 30,
+  skip?: (hex: string) => boolean,
 ): Candidate | null {
   let best: Candidate | null = null;
   let bestD = Infinity;
   for (const ac of aircraft) {
     if (ac.onGround || ac.lat == null || ac.lon == null || ac.track == null) continue;
+    if (skip?.(ac.hex) || ac.category === ROTORCRAFT_CATEGORY) continue;
     if (msgAgeSec(ac, now) > staleSec || fixAgeSec(ac, now) > posStaleSec) continue;
     const altFt = ac.altGeom ?? ac.altBaro;
     if (altFt == null || altFt > DEP_MAX_ALT_FT) continue;
