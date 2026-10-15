@@ -152,6 +152,14 @@ export class ViscaCamera implements CameraDriver {
   private lastDrive: string | null = null;
   /** The zoom each axis's running drive speed was set at (see speedLatched). */
   private latchZoom: { pan: number; tilt: number } | null = null;
+  /** When the last drive / zoom position command went out (re-latch pacing). */
+  private lastDriveSentAt = 0;
+  private lastZoomSentAt = 0;
+  /** Re-latch at most this often, and not this soon after a zoom command:
+   *  re-sending the drive on every tick while the lens travelled tripled the
+   *  camera's dropped Zoom Directs (build q, 2026-10-15: 7 resends in 21 min
+   *  vs 4-6 an hour) — a busy camera drops commands. */
+  private static readonly RELATCH_MIN_MS = 400;
 
   constructor(private o: ViscaOptions) {}
 
@@ -445,10 +453,14 @@ export class ViscaCamera implements CameraDriver {
       const now1 = stepRate(table, step);
       return Math.abs(now1 - was) > 0.1 * Math.max(was, now1) && zNow !== this.latchZoom[axis];
     };
-    const relatch = stale("pan", panStep, zPan, panTable) || stale("tilt", tiltStep, zTilt, tiltTable);
+    const relatch =
+      now - this.lastDriveSentAt >= ViscaCamera.RELATCH_MIN_MS &&
+      now - this.lastZoomSentAt >= ViscaCamera.RELATCH_MIN_MS &&
+      (stale("pan", panStep, zPan, panTable) || stale("tilt", tiltStep, zTilt, tiltTable));
     if (key === this.lastDrive && !relatch) return;
     this.lastDrive = key;
     this.latchZoom = { pan: zPan, tilt: zTilt };
+    this.lastDriveSentAt = now;
     // A stopped axis (dir 0x03) ignores its speed byte — send the canonical 1.
     // Byte 0x00 must pass through unclamped: it's the slow gear.
     this.sendCommand([
@@ -946,6 +958,7 @@ export class ViscaCamera implements CameraDriver {
 
   /** A zoom position went out (any command that carries one). */
   private zoomSent(z: number): void {
+    this.lastZoomSentAt = Date.now();
     const d = this.zoomDelivery;
     const resends = d && Math.abs(d.goal - z) <= 8 ? d.resends : 0;
     this.zoomDelivery = { goal: z, best: Infinity, progressAt: Date.now(), resends };
