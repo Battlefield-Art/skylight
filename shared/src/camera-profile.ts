@@ -104,11 +104,15 @@ function rateInRow(row: [number, number][], step: number): number {
 }
 
 /**
- * The speed table that applies at `zoomUnits`: every step of the wide table,
- * each rate interpolated between the bracketing measured rows. Entries that
- * fail to rise ≥0.05°/s over the previous one are dropped so the dither's
- * bracket never divides by a zero-width gap (at tele most bytes collapse onto
- * the floor and only the rising ones remain).
+ * The speed table that applies at `zoomUnits`: the steps MEASURED at that
+ * zoom — in both bracketing rows when between rows, each rate interpolated
+ * in zoom. Steps a row didn't measure are not invented by interpolating
+ * along the row: this firmware maps the bytes onto a few native speeds (at
+ * zoom 1385 bytes 0-4 ≈ 1.5°/s, 8 ≈ 3°/s, 12 ≈ 7°/s), so an "in-between"
+ * byte runs at one of its neighbours' speeds, not between them — the dither
+ * mixed bytes it believed were 1.9-2.6°/s and the head lurched at 4-5°/s
+ * (THY73G 2026-10-15). Entries that fail to rise ≥0.05°/s over the previous
+ * one are dropped so the dither's bracket never divides by a zero-width gap.
  */
 export function speedTableAt(
   axis: "pan" | "tilt",
@@ -128,9 +132,15 @@ export function speedTableAt(
     }
   }
   const f = hi.zoom === lo.zoom ? 0 : (z - lo.zoom) / (hi.zoom - lo.zoom);
+  const loSteps = new Set(lo[axis].map(([st]) => st));
+  const hiSteps = new Set(hi[axis].map(([st]) => st));
+  let steps =
+    f <= 0 ? [...loSteps] : f >= 1 ? [...hiSteps] : [...loSteps].filter((st) => hiSteps.has(st));
+  if (steps.length < 2) steps = wide.map(([st]) => st); // rows share too little: fall back
+  steps.sort((a, b) => a - b);
   const out: [number, number][] = [];
   let last = -Infinity;
-  for (const [step] of wide) {
+  for (const step of steps) {
     const r = rateInRow(lo[axis], step) * (1 - f) + rateInRow(hi[axis], step) * f;
     if (r >= last + 0.05) {
       out.push([step, r]);
