@@ -1957,6 +1957,13 @@ export class ControlLoop {
         this.corrEl = 0;
         this.corrAzApp = 0;
         this.corrElApp = 0;
+        // Evidence gathered under the OLD model no longer describes this one:
+        // folding those pass biases into the new model double-corrected it
+        // (2026-10-15 after the re-mount: folds −1.15°, +0.37°, −1.53° on
+        // tilt between auto-cal applies). Same for the landmark references.
+        this.biasHistory = [];
+        this.passBias = [];
+        this.landmarks.clear();
         this.recorder.write("autoCal", { ...out });
         console.log(
           `[tracker] auto-calibration applied: rms ${out.rmsBeforeDeg.toFixed(2)}° -> ` +
