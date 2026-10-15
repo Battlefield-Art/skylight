@@ -1949,7 +1949,7 @@ export class ControlLoop {
       now - this.lastAutoCalAt > 30_000
     ) {
       this.lastAutoCalAt = now;
-      const out = this.autoCal.trySolve(cfg.mount, now);
+      const out = this.autoCal.trySolve(cfg.mount, now, { fitGains: cfg.vision.autoCalGains === true });
       if (out) {
         this.upstream.patchConfig({ tracker: { mount: out.model } } as Partial<Config>);
         this.corrAz = 0;
