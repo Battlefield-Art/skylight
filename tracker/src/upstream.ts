@@ -14,6 +14,39 @@ import {
   type ServerMessage,
 } from "@shared/index.js";
 
+/**
+ * Positions carried across polls. readsb now and then sends an aircraft with
+ * no position for one poll (2026-10-15 00:18Z: a departure at 125 ft, the
+ * surface→airborne switch); everything downstream skipped it as if it had
+ * vanished — the departure lost its priority for 0.5 s and the camera
+ * switched target and back. A missing position is not a missing aircraft:
+ * the last fix, with its true age, is still the best estimate, and the
+ * position-staleness limits (fixAgeSec) decide when it is too old.
+ */
+export class PositionCarry {
+  private last = new Map<string, { lat: number; lon: number; fixAt: number }>();
+
+  /** Fill missing positions in this snapshot from the previous fixes (in place). */
+  apply(aircraft: Aircraft[], now: number): Aircraft[] {
+    const seen = new Set<string>();
+    for (const ac of aircraft) {
+      seen.add(ac.hex);
+      const ts = ac.ts ?? now;
+      if (ac.lat != null && ac.lon != null) {
+        this.last.set(ac.hex, { lat: ac.lat, lon: ac.lon, fixAt: ts - 1000 * (ac.seenPos ?? ac.seen ?? 0) });
+        continue;
+      }
+      const prev = this.last.get(ac.hex);
+      if (!prev) continue;
+      ac.lat = prev.lat;
+      ac.lon = prev.lon;
+      ac.seenPos = Math.max(0, (ts - prev.fixAt) / 1000);
+    }
+    for (const hex of this.last.keys()) if (!seen.has(hex)) this.last.delete(hex);
+    return aircraft;
+  }
+}
+
 export interface UpstreamEvents {
   onSnapshot?: (now: number, aircraft: Aircraft[]) => void;
   onConfig?: (config: Config) => void;
@@ -37,6 +70,7 @@ export class WsUpstream implements Upstream {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private config: Config = DEFAULT_CONFIG;
   private aircraft = new Map<string, Aircraft>();
+  private carry = new PositionCarry();
 
   constructor(
     private url: string,
@@ -112,10 +146,9 @@ export class WsUpstream implements Upstream {
       this.events.onConfig?.(this.config);
     } else if (msg.type === "aircraft") {
       this.aircraft.clear();
-      for (const ac of msg.aircraft) {
-        if (ac.ts == null) ac.ts = msg.now;
-        this.aircraft.set(ac.hex, ac);
-      }
+      for (const ac of msg.aircraft) if (ac.ts == null) ac.ts = msg.now;
+      this.carry.apply(msg.aircraft, msg.now);
+      for (const ac of msg.aircraft) this.aircraft.set(ac.hex, ac);
       this.events.onSnapshot?.(msg.now, msg.aircraft);
     }
   }
@@ -127,6 +160,7 @@ export class WsUpstream implements Upstream {
  */
 export class ReplayUpstream implements Upstream {
   private aircraft = new Map<string, Aircraft>();
+  private carry = new PositionCarry();
   private config: Config = DEFAULT_CONFIG;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private running = false;
@@ -168,6 +202,7 @@ export class ReplayUpstream implements Upstream {
             ...ac,
             ts: (ac.ts ?? snap.t) + shift,
           }));
+          this.carry.apply(shifted, now);
           for (const ac of shifted) this.aircraft.set(ac.hex, ac);
           this.events.onSnapshot?.(wall0 + delay * this.speed, shifted);
         }, delay),
