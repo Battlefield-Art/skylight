@@ -1117,6 +1117,8 @@ export class ControlLoop {
           ? { name: cfg.experiment, arm: this.abCount++ % 2 === 0 ? "A" : "B" }
           : null;
         this.resetSetpoint();
+        // Lock-first association: under test (arm B of experiment lockFirst).
+        this.tracks.lockFirst = this.abArm?.name === "lockFirst" && this.abArm.arm === "B";
         this.recorder.write("target", { hex });
         this.emit({ kind: "target", t: now, hex: hex ?? null });
       }

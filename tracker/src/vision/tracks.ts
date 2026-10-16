@@ -267,6 +267,13 @@ export class TrackTable {
   /** Diagnostics from the last update(): per observation, the track it fed
    *  (id), and whether that track was spawned by it. */
   lastAssign: { trackId: number; spawned: boolean }[] = [];
+  /** The lock picks its observation before the greedy pass. Greedy
+   *  nearest-first let a duplicate track of the same plane (spawned by one
+   *  detection outside the gate) win every later detection by being a little
+   *  closer: the lock starved and coasted 0.2-0.4° off the plane — 1.3k of the
+   *  1.3k "candidates elsewhere" tele misses on 2026-10-16 had the nearest
+   *  candidate feeding another track. */
+  lockFirst = false;
 
   all(): CandidateTrack[] {
     return this.tracks;
@@ -315,7 +322,11 @@ export class TrackTable {
     const trackUsed = new Set<number>();
     const obsUsed = new Set<number>();
     this.lastAssign = [];
-    for (const p of pairs) {
+    const lockIdx = this.lockFirst && this.lockedId !== null
+      ? this.tracks.findIndex((t) => t.id === this.lockedId)
+      : -1;
+    const first = lockIdx >= 0 ? pairs.find((p) => p.ti === lockIdx) : undefined;
+    for (const p of first ? [first, ...pairs] : pairs) {
       if (trackUsed.has(p.ti) || obsUsed.has(p.oi)) continue;
       trackUsed.add(p.ti);
       obsUsed.add(p.oi);
