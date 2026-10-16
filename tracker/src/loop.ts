@@ -2493,8 +2493,16 @@ export class ControlLoop {
         // 2026-10-14 35-42 s, 82σ against the sky).
         const near = cands.reduce(
           (m, c) => Math.min(m, Math.hypot((c.cx - exX) * VISION_W, (c.cy - exY) * VISION_H)), Infinity);
+        // Candidates (frame x, y, area px, σ, the track each fed, + if it spawned one)
+        // and the lock's id: what the "candidates elsewhere" frames are made of.
+        const asg = this.tracks.lastAssign;
+        const candDiag = cands.slice(0, 5).map((c, i) => [
+          Math.round(c.cx * 1000) / 1000, Math.round(c.cy * 1000) / 1000, c.areaPx,
+          Math.round(c.contrastSigma * 10) / 10, asg[i]?.trackId ?? null, asg[i]?.spawned ? 1 : 0,
+        ]);
         this.recorder.write("visionMiss", {
           hfov: hfovF, exX, exY, nCands: cands.length, nearPx: Number.isFinite(near) ? near : null,
+          cands: candDiag, lockId: this.tracks.lockedTrack()?.id ?? null, nTracks: this.tracks.all().length,
           silTried, silFound, silWide, aimRateDps,
           sel: sel ? {
             hits: sel.track.hits, ageMs: frameT - sel.track.lastSeen, eligible: sel.eligible,

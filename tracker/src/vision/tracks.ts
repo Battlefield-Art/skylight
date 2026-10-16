@@ -264,6 +264,9 @@ export class TrackTable {
   /** Predicted plane rates from the last select(): how the lock coasts
    *  while unseen (see CandidateTrack.positionAt). */
   private coast: { azRateDps: number; elRateDps: number } | null = null;
+  /** Diagnostics from the last update(): per observation, the track it fed
+   *  (id), and whether that track was spawned by it. */
+  lastAssign: { trackId: number; spawned: boolean }[] = [];
 
   all(): CandidateTrack[] {
     return this.tracks;
@@ -311,15 +314,20 @@ export class TrackTable {
     pairs.sort((a, b) => a.d - b.d);
     const trackUsed = new Set<number>();
     const obsUsed = new Set<number>();
+    this.lastAssign = [];
     for (const p of pairs) {
       if (trackUsed.has(p.ti) || obsUsed.has(p.oi)) continue;
       trackUsed.add(p.ti);
       obsUsed.add(p.oi);
       this.tracks[p.ti].push(observations[p.oi]);
+      this.lastAssign[p.oi] = { trackId: this.tracks[p.ti].id, spawned: false };
     }
     // Unmatched observations seed new tracks.
     for (let oi = 0; oi < observations.length; oi++) {
-      if (!obsUsed.has(oi)) this.tracks.push(new CandidateTrack(observations[oi]));
+      if (obsUsed.has(oi)) continue;
+      const tr = new CandidateTrack(observations[oi]);
+      this.tracks.push(tr);
+      this.lastAssign[oi] = { trackId: tr.id, spawned: true };
     }
     // Expire stale tracks; cap the population (locked track is immortal
     // within its grace window).
