@@ -235,6 +235,12 @@ const TONGVEO_SPEED_SURFACE: SpeedRow[] = [
     pan: [[0, 1.32], [4, 2.79], [8, 6.6], [12, 15.7], [16, 15.63], [18, 22.19]],
     tilt: [[0, 1.51], [4, 2.93], [8, 4.59], [16, 8.04]],
   },
+  // 2026-10-15 every byte 0-10 measured at 1385 and 1437 (characterize-camera,
+  // job notes): three native speeds per axis — pan ≈1.45 / ≈3.0 / 7.2°/s,
+  // tilt ≈1.55 / ≈3.1 / 4.4-4.9°/s; per-byte noise ±0.1°/s. The rows below
+  // already hold one byte of each gear, so they were kept as they are. NB the
+  // speed floor's limit at full tele (maxSpeedStepFwps × 3.4° = 1.53°/s) sits
+  // inside the noise of the slowest tilt gear (1.46-1.70 measured).
   {
     zoom: 1385,
     pan: [[0, 1.42], [4, 1.55], [8, 2.97], [12, 7.06], [16, 7.39], [18, 7.06]],
