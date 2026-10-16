@@ -3,7 +3,7 @@
 # CURRENT mount model (env SKYLIGHT_MOUNT, see sky.py) rotated by each candidate angle
 # (pan offset and lean direction both turn with the base).
 #   SKYLIGHT_MOUNT='{...}' LIM=172 python3 blindspot.py <dir with *.series.json> [...]
-import sys,glob,json,math,os,collections
+import sys,glob,json,os
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
 import sky
 M=dict(sky.MOUNT)
@@ -19,6 +19,7 @@ for d in sys.argv[1:]:
             if r[ia] is None or r[ie] is None or r[ie]<12: continue
             samples.append((r[ia],r[ie],pid))
 print('passes',passes,'samples',len(samples))
+if not passes: sys.exit('no *.series.json found')
 LIM=float(os.environ.get("LIM","172"))
 def score(rot):
     m=dict(M); m['panOffsetDeg']=M['panOffsetDeg']+rot; m['levelDirDeg']=(M['levelDirDeg']+rot)%360

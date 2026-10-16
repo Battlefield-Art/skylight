@@ -58,6 +58,27 @@ function score(ac: Aircraft, azEl: AzEl, mode: TargetMode, c: TargetCriteria): {
   }
 }
 
+/** How far ahead a current target passing the sun must be clear again to keep it, s. */
+const SUN_PASS_SEC = 20;
+
+function clearOfSunSoon(
+  ac: Aircraft,
+  geo: GeoPoint,
+  site: GeoPoint,
+  sun: { azDeg: number; elDeg: number },
+  keepOutDeg: number,
+): boolean {
+  const kin = { lat: geo.lat, lon: geo.lon, altM: geo.altM, gsKt: ac.gs, trackDeg: ac.track, vRateFpm: ac.baroRate };
+  const ahead = azElFromSite(site, predictGeo(kin, SUN_PASS_SEC));
+  return angularSepDeg(ahead.azDeg, ahead.elDeg, sun.azDeg, sun.elDeg) >= keepOutDeg;
+}
+
+/** Margins the CURRENT target gets on the candidate filters (hysteresis). */
+const KEEP_ALT_FT = 300;
+const KEEP_EL_DEG = 2;
+const KEEP_RANGE_FRAC = 0.1;
+const KEEP_SUN_DEG = 1;
+
 /**
  * Pick the aircraft to film. `current` survives unless it becomes invalid
  * (below min elevation / out of range / stale) or a challenger beats it by
@@ -98,9 +119,9 @@ export function selectTarget(
     // keep-out) dropped out and came back poll after poll, and each return
     // re-took the camera from whatever had replaced it (N45EC at 500-675 ft
     // 0.4 mi away, 2026-10-15: 11 target switches in 85 s).
-    const keep = current?.hex === ac.hex ? 1 : 0;
+    const keep = current?.hex === ac.hex;
     const altFt = ac.altGeom ?? ac.altBaro;
-    if (altFt == null || altFt < c.minAltFt - keep * KEEP_ALT_FT) continue;
+    if (altFt == null || altFt < c.minAltFt - (keep ? KEEP_ALT_FT : 0)) continue;
     // Still being heard, and the position not too old to dead-reckon: a
     // plane in the antenna's overhead null keeps sending velocity/altitude
     // while its position goes quiet for tens of seconds — worth following by
@@ -110,11 +131,11 @@ export function selectTarget(
     const geo = aircraftGeoPoint(ac);
     if (!geo) continue;
     const azEl = azElFromSite(site, geo);
-    if (azEl.elDeg < c.minElevationDeg - keep * KEEP_EL_DEG) continue;
+    if (azEl.elDeg < c.minElevationDeg - (keep ? KEEP_EL_DEG : 0)) continue;
     // Per-azimuth clear-sky horizon (+1° so the frame's lower edge at tele
     // stays above the roofline/trees).
-    if (azEl.elDeg < horizonMinEl(horizon, azEl.azDeg, -90) + 1 - keep * KEEP_EL_DEG) continue;
-    if (azEl.slantM > c.maxRangeMi * MI_TO_M * (1 + keep * KEEP_RANGE_FRAC)) continue;
+    if (azEl.elDeg < horizonMinEl(horizon, azEl.azDeg, -90) + 1 - (keep ? KEEP_EL_DEG : 0)) continue;
+    if (azEl.slantM > c.maxRangeMi * MI_TO_M * (keep ? 1 + KEEP_RANGE_FRAC : 1)) continue;
     // (The aim guard keeps the sun out of the frame on its own; the margin
     // here only stops the target flickering at the selection boundary.)
     // The plane being filmed is KEPT while it is only passing the sun — the
@@ -122,7 +143,7 @@ export function selectTarget(
     // design). Dropping it handed the camera to a far plane for the 20 s
     // crossing and took it back after (N6695M 2026-10-15 12:57, 0% lock on
     // the stand-in). Kept only if it is clear again SUN_PASS_SEC ahead.
-    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid - keep * KEEP_SUN_DEG) {
+    if (sun && angularSepDeg(azEl.azDeg, azEl.elDeg, sun.azDeg, sun.elDeg) < sunAvoid - (keep ? KEEP_SUN_DEG : 0)) {
       if (!keep || !clearOfSunSoon(ac, geo, site, sun, sunAvoid)) continue;
     }
     const { s, note } = score(ac, azEl, mode, c);
@@ -175,26 +196,6 @@ export function selectTarget(
   return { hex: challengerWins ? best.hex : cur.hex, candidates };
 }
 
-/** How far ahead a current target passing the sun must be clear again to keep it, s. */
-const SUN_PASS_SEC = 20;
-
-function clearOfSunSoon(
-  ac: Aircraft,
-  geo: GeoPoint,
-  site: GeoPoint,
-  sun: { azDeg: number; elDeg: number },
-  keepOutDeg: number,
-): boolean {
-  const kin = { lat: geo.lat, lon: geo.lon, altM: geo.altM, gsKt: ac.gs, trackDeg: ac.track, vRateFpm: ac.baroRate ?? 0 };
-  const ahead = azElFromSite(site, predictGeo(kin, SUN_PASS_SEC));
-  return angularSepDeg(ahead.azDeg, ahead.elDeg, sun.azDeg, sun.elDeg) >= keepOutDeg;
-}
-
-/** Margins the CURRENT target gets on the candidate filters (hysteresis). */
-const KEEP_ALT_FT = 300;
-const KEEP_EL_DEG = 2;
-const KEEP_RANGE_FRAC = 0.1;
-const KEEP_SUN_DEG = 1;
 
 /** Departure watch radius around the airport and toward the site, m. */
 const DEP_MAX_FROM_AIRPORT_M = 6000;

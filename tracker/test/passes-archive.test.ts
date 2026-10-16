@@ -51,6 +51,7 @@ describe("PassArchive", () => {
   let state: TrackerState;
   let aircraft: Aircraft;
   let archive: PassArchive;
+  let baseOpts: ConstructorParameters<typeof PassArchive>[0];
   let uploader: PassUploader;
 
   beforeEach(async () => {
@@ -59,7 +60,7 @@ describe("PassArchive", () => {
     state = makeState(clock);
     aircraft = { hex: "a622bc", flight: "ASA236", gs: 250, altGeom: 11000, baroRate: 0, track: 205, ts: clock };
     uploader = new PassUploader(dir, { key: null, setTimer: () => {} });
-    archive = new PassArchive({
+    baseOpts = {
       dir,
       source: null,
       getState: () => state,
@@ -73,7 +74,8 @@ describe("PassArchive", () => {
       tz: "America/Los_Angeles",
       keepLocal: 2,
       now: () => clock,
-    });
+    };
+    archive = new PassArchive(baseOpts);
   });
   afterEach(async () => {
     await archive.stop();
@@ -103,7 +105,7 @@ describe("PassArchive", () => {
   it("discards a pass when the video source captured nothing (camera down)", async () => {
     await archive.stop();
     archive = new PassArchive({
-      ...(archive as unknown as { opts: ConstructorParameters<typeof PassArchive>[0] }).opts,
+      ...baseOpts,
       source: { tap: () => () => {}, init: () => null },
     });
     archive.onLoopEvent({ kind: "target", t: clock, hex: "a622bc" });
@@ -117,7 +119,7 @@ describe("PassArchive", () => {
     state.target.predicted = { azDeg: 120, elDeg: 3, slantM: 8000 }; // below a 10° roofline
     await archive.stop();
     archive = new PassArchive({
-      ...(archive as unknown as { opts: ConstructorParameters<typeof PassArchive>[0] }).opts,
+      ...baseOpts,
       config: () => ({
         ...DEFAULT_CONFIG.tracker,
         limits: { ...DEFAULT_CONFIG.tracker.limits, horizon: [{ azDeg: 0, minElDeg: 10 }, { azDeg: 180, minElDeg: 10 }] },

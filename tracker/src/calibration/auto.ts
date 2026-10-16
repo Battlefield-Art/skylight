@@ -195,7 +195,7 @@ export class AutoCalibrator {
 
     const aSpan = azSpan(this.samples);
     const eSpan = elSpan(this.samples);
-    const coverage =
+    const skyCovered =
       this.samples.length >= GAINS_MIN_SAMPLES &&
       aSpan >= GAINS_MIN_AZ_SPAN &&
       eSpan >= GAINS_MIN_EL_SPAN;
@@ -204,8 +204,8 @@ export class AutoCalibrator {
     // tiltGain 0.966…0.990 all fit within 0.04° rms, so each refit moved the
     // gain and the offsets traded against it (tiltGain .966→.987 in an hour).
     // Solved only when asked (a new camera's first calibration).
-    const solveGains = coverage && opts.fitGains !== false;
-    const solveLevel = coverage && this.samples.length >= LEVEL_MIN_SAMPLES;
+    const solveGains = skyCovered && opts.fitGains === true;
+    const solveLevel = skyCovered && this.samples.length >= LEVEL_MIN_SAMPLES;
 
     const rmsBefore = rmsUnder(this.samples, current);
     const fit = this.robustFit(this.samples, current, { solveGains, solveLevel }, MIN_SAMPLES);

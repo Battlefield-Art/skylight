@@ -242,6 +242,27 @@ export type LoopEvent =
       hfov: number | null;
     };
 
+/**
+ * Config patch for an automatic mount update. With limits.followTiltOffset
+ * the tilt range and the park tilt move by the same tilt-offset change (in
+ * encoder degrees), so the head's PHYSICAL range stays what it was: a tilt
+ * zero slip otherwise pins low planes at the old floor and puts the park past
+ * vertical, into the auto-flip zone (2026-10-15).
+ */
+export function mountPatch(cfg: TrackerConfig, next: MountModel): Partial<Config> {
+  const tracker: { mount: MountModel; limits?: TrackerConfig["limits"]; camera?: TrackerConfig["camera"] } = { mount: next };
+  const d = (next.tiltOffsetDeg - cfg.mount.tiltOffsetDeg) / (next.tiltGain || 1);
+  if (cfg.limits.followTiltOffset && Number.isFinite(d) && Math.abs(d) > 1e-6) {
+    tracker.limits = { ...cfg.limits, tiltMinDeg: cfg.limits.tiltMinDeg - d, tiltMaxDeg: cfg.limits.tiltMaxDeg - d };
+    tracker.camera = {
+      ...cfg.camera,
+      mechanical: { ...cfg.camera.mechanical, parkTiltMaxDeg: cfg.camera.mechanical.parkTiltMaxDeg - d },
+    };
+    console.log(`[tracker] tilt range follows the offset: ${(-d).toFixed(2)}° → ${tracker.limits.tiltMinDeg.toFixed(1)}…${tracker.limits.tiltMaxDeg.toFixed(1)}°`);
+  }
+  return { tracker } as Partial<Config>;
+}
+
 export class ControlLoop {
   private listeners = new Set<(e: LoopEvent) => void>();
   private mode: TrackerMode = "auto";
@@ -819,7 +840,7 @@ export class ControlLoop {
           verdict.model.tiltOffsetDeg - cfg.mount.tiltOffsetDeg,
           cfg.mount.panGain, cfg.mount.tiltGain, now,
         );
-        this.upstream.patchConfig(this.mountPatch(verdict.model));
+        this.upstream.patchConfig(mountPatch(this.cfg(), verdict.model));
         // Re-shoot the references at once (same frames, new model) so the
         // next check measures only drift from here.
         this.landmarks.save(capture(verdict.model));
@@ -855,10 +876,10 @@ export class ControlLoop {
   private passBias: { az: number; el: number }[] = [];
   private leadLearn = new LeadLearner();
   private biasSampleAt = 0;
-  /** Recent passes' median corrections, newest last. */
   /** Direction and time of the last fold per axis (ramp detection). */
   private lastFoldAz: { sign: number; t: number } | null = null;
   private lastFoldEl: { sign: number; t: number } | null = null;
+  /** Recent passes' median corrections, newest last. */
   private biasHistory: { az: number; el: number; t: number }[] = [];
 
   /**
@@ -904,7 +925,9 @@ export class ControlLoop {
     };
     // Damped: the bias responded ~2x to each fold on 2026-10-11 (−1.64° moved
     // it −3.3°, +1.52° moved it +2.5°), so full folds oscillated. Half a
-    // fold converges whether the true gain is 1 or 2.
+    // fold converges whether the true gain is 1 or 2 — except on a ramp (a
+    // fold in the same direction as the last one): full gain, see
+    // BIAS_FOLD_RAMP_MS.
     const gain = (v: number, prev: { sign: number; t: number } | null) =>
       v !== 0 && prev && prev.sign === Math.sign(v) && now - prev.t < BIAS_FOLD_RAMP_MS ? 1 : BIAS_FOLD_GAIN;
     const fAz = fold(last.map((h) => h.az));
@@ -917,33 +940,11 @@ export class ControlLoop {
     const m = cfg.mount;
     const next = { ...m, panOffsetDeg: m.panOffsetDeg - dAz, tiltOffsetDeg: m.tiltOffsetDeg - dEl };
     this.autoCal.shiftSamples(-dAz, -dEl, m.panGain, m.tiltGain, now);
-    this.upstream.patchConfig(this.mountPatch(next));
+    this.upstream.patchConfig(mountPatch(this.cfg(), next));
     this.landmarks.clear(); // re-shoot the references under the new model (disk too)
     this.biasHistory = [];
     this.recorder.write("biasFold", { dAz, dEl, mount: next });
     console.log(`[tracker] bias fold-in: pan offset ${(-dAz).toFixed(2)}°, tilt offset ${(-dEl).toFixed(2)}° (last ${BIAS_FOLD_PASSES} passes agree)`);
-  }
-
-  /**
-   * Config patch for an automatic mount update. With limits.followTiltOffset
-   * the tilt range and the park tilt move by the same tilt-offset change (in
-   * encoder degrees), so the head's PHYSICAL range stays what it was: a tilt
-   * zero slip otherwise pins low planes at the old −20° (encoder) floor and
-   * puts the park past vertical, into the auto-flip zone.
-   */
-  private mountPatch(next: MountModel): Partial<Config> {
-    const cfg = this.cfg();
-    const tracker: Record<string, unknown> = { mount: next };
-    const d = (next.tiltOffsetDeg - cfg.mount.tiltOffsetDeg) / (next.tiltGain || 1);
-    if (cfg.limits.followTiltOffset && Number.isFinite(d) && Math.abs(d) > 1e-6) {
-      tracker.limits = { ...cfg.limits, tiltMinDeg: cfg.limits.tiltMinDeg - d, tiltMaxDeg: cfg.limits.tiltMaxDeg - d };
-      tracker.camera = {
-        ...cfg.camera,
-        mechanical: { ...cfg.camera.mechanical, parkTiltMaxDeg: cfg.camera.mechanical.parkTiltMaxDeg - d },
-      };
-      console.log(`[tracker] tilt range follows the offset: ${(-d).toFixed(2)}° → ${(cfg.limits.tiltMinDeg - d).toFixed(1)}…${(cfg.limits.tiltMaxDeg - d).toFixed(1)}°`);
-    }
-    return { tracker } as unknown as Partial<Config>;
   }
 
   private resetSetpoint(): void {
@@ -1988,7 +1989,7 @@ export class ControlLoop {
       this.lastAutoCalAt = now;
       const out = this.autoCal.trySolve(cfg.mount, now, { fitGains: cfg.vision.autoCalGains === true });
       if (out) {
-        this.upstream.patchConfig(this.mountPatch(out.model));
+        this.upstream.patchConfig(mountPatch(this.cfg(), out.model));
         this.corrAz = 0;
         this.corrAzX = 0;
         this.corrEl = 0;

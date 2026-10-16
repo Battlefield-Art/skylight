@@ -65,8 +65,7 @@ describe("sun keep-out and the current target", () => {
     expect(selectTarget([plane], site, now, { hex: "p", sinceMs: now - 9000 }, "closest", c2, 15, 30, undefined, sunOn).hex).toBe("p");
   });
   it("drops the current target that stays on the sun line", () => {
-    const parked = { ...plane, gs: 0 } as Aircraft;
+    const parked: Aircraft = { ...plane, gs: 0 };
     expect(selectTarget([parked], site, now, { hex: "p", sinceMs: now - 9000 }, "closest", c2, 15, 30, undefined, sunOn).hex).toBeNull();
   });
 });
-

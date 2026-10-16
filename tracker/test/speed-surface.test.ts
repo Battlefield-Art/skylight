@@ -27,7 +27,7 @@ describe("speedTableAt", () => {
     const t = speedTableAt("pan", 600, SURFACE); // exactly on the 600 row: its steps only
     expect(t.map(([st]) => st)).toEqual([1, 2, 4]);
     const mid = speedTableAt("pan", 900, SURFACE); // between 600 and 1200: steps both measured
-    expect(mid.map(([st]) => st)).toEqual([1, 2, 4].filter((st) => mid.some(([x]) => x === st)));
+    expect(mid.map(([st]) => st)).toEqual([1, 2, 4]);
     expect(mid.find(([st]) => st === 3)).toBeUndefined();
   });
   it("drops steps that have collapsed onto the floor so the dither never sees a zero gap", () => {

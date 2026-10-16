@@ -421,13 +421,11 @@ export class ViscaCamera implements CameraDriver {
     // picked at the stale tele reading ran several times faster at the
     // wider zoom it landed at — 9° past the setpoint in the loop twin.)
     const surface = this.o.profile().speedSurface;
-    const zPan = this.fasterZoom("pan", now);
-    const zTilt = this.fasterZoom("tilt", now);
+    const { zoom: zPan, table: panTable } = this.fasterTable("pan", now);
+    const { zoom: zTilt, table: tiltTable } = this.fasterTable("tilt", now);
     const R = opts?.rippleDeg ?? ViscaCamera.DITHER_RIPPLE_DEG;
     const RT = opts?.rippleTiltDeg ?? R;
-    const panTable = speedTableAt("pan", zPan, surface);
     const panStep = this.pickDithered(this.panDither, panTable, pd, now, R);
-    const tiltTable = speedTableAt("tilt", zTilt, surface);
     let tiltStep: number;
     const stepper = this.tiltDetentStep(tiltTable, td, zTilt, now);
     if (stepper !== null) {
@@ -447,16 +445,16 @@ export class ViscaCamera implements CameraDriver {
     // clearly different speed than the one the camera latched.
     const key = `${panStep}:${panDir}:${tiltStep}:${tiltDir}`;
     const latched = this.o.profile().speedLatched !== false;
-    const stale = (axis: "pan" | "tilt", step: number, zNow: number, table: [number, number][]) => {
+    const stale = (axis: "pan" | "tilt", step: number, table: [number, number][]) => {
       if (!latched || step === STOP_STEP || !this.latchZoom) return false;
-      const was = stepRate(speedTableAt(axis, this.latchZoom[axis], surface), step);
-      const now1 = stepRate(table, step);
-      return Math.abs(now1 - was) > 0.1 * Math.max(was, now1) && zNow !== this.latchZoom[axis];
+      const rateWas = stepRate(speedTableAt(axis, this.latchZoom[axis], surface), step);
+      const rateNow = stepRate(table, step);
+      return Math.abs(rateNow - rateWas) > 0.1 * Math.max(rateWas, rateNow);
     };
     const relatch =
       now - this.lastDriveSentAt >= ViscaCamera.RELATCH_MIN_MS &&
       now - this.lastZoomSentAt >= ViscaCamera.RELATCH_MIN_MS &&
-      (stale("pan", panStep, zPan, panTable) || stale("tilt", tiltStep, zTilt, tiltTable));
+      (stale("pan", panStep, panTable) || stale("tilt", tiltStep, tiltTable));
     if (key === this.lastDrive && !relatch) return;
     this.lastDrive = key;
     this.latchZoom = { pan: zPan, tilt: zTilt };
@@ -711,17 +709,16 @@ export class ViscaCamera implements CameraDriver {
   }
 
   /** Of the zoom reading and the estimate, the one whose speed table is
-   *  faster on this axis (its top rate). */
-  private fasterZoom(axis: "pan" | "tilt", now: number): number {
+   *  faster on this axis (its top rate), with that table. */
+  private fasterTable(axis: "pan" | "tilt", now: number): { zoom: number; table: [number, number][] } {
+    const surface = this.o.profile().speedSurface;
     const read = this.currentZoom();
     const est = this.lensZoomNow(now);
-    if (est === read) return read;
-    const surface = this.o.profile().speedSurface;
-    const top = (z: number) => {
-      const t = speedTableAt(axis, z, surface);
-      return t[t.length - 1][1];
-    };
-    return top(est) > top(read) ? est : read;
+    const readTable = speedTableAt(axis, read, surface);
+    if (est === read) return { zoom: read, table: readTable };
+    const estTable = speedTableAt(axis, est, surface);
+    const top = (t: [number, number][]) => t[t.length - 1][1];
+    return top(estTable) > top(readTable) ? { zoom: est, table: estTable } : { zoom: read, table: readTable };
   }
 
   /** Zoom the lens is at (inquiry), else the last commanded, else wide. */

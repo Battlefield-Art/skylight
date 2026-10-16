@@ -136,7 +136,9 @@ export function speedTableAt(
   const hiSteps = new Set(hi[axis].map(([st]) => st));
   let steps =
     f <= 0 ? [...loSteps] : f >= 1 ? [...hiSteps] : [...loSteps].filter((st) => hiSteps.has(st));
-  if (steps.length < 2) steps = wide.map(([st]) => st); // rows share too little: fall back
+  // Rows that share fewer than two measured steps can't bracket a rate: fall
+  // back to the nearer row's own steps (still only measured bytes).
+  if (steps.length < 2) steps = (f < 0.5 ? lo : hi)[axis].map(([st]) => st);
   steps.sort((a, b) => a - b);
   const out: [number, number][] = [];
   let last = -Infinity;
@@ -149,7 +151,6 @@ export function speedTableAt(
   }
   return out;
 }
-
 
 /**
  * Holding `rateDps` with discrete speeds means alternating between the two

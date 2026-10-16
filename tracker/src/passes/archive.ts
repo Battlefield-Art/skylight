@@ -375,7 +375,8 @@ export class PassArchive {
     // Nor is a plane that never rose above the skyline: a departure picked at
     // lift-off that turned away while still below the roofline left a clip
     // of rooftops (2026-10-15: 4 of 65 passes, max el 2-6°).
-    const hz = this.opts.config().limits.horizon;
+    const cfg = this.opts.config();
+    const hz = cfg.limits.horizon;
     const everInView = s.samples.some(
       (r) => r.pAz != null && r.pEl != null && r.pEl >= horizonMinEl(hz, r.pAz, 0),
     );
@@ -404,7 +405,6 @@ export class PassArchive {
     }
     if (clip?.startWallMs != null) clipOffsetSec = (clip.startWallMs - s.startedAt) / 1000;
 
-    const cfg = this.opts.config();
     const tuning: PassTuning = {
       pursuit: cfg.predict.pursuit,
       maxLeadSec: cfg.predict.maxLeadSec,

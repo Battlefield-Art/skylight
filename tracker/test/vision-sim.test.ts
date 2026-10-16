@@ -16,8 +16,9 @@ describe("vision twin: acquisition", () => {
     for (const start of [undefined, { panDeg: 120, tiltDeg: 30, zoomUnits: 1385 }]) {
       it(`${name}, ${start ? "switch from a tele target" : "from wide"}`, async () => {
         const m = await runPass(baseTracker(), flight, DEFAULT_HEAD, undefined, { vision: {}, start });
-        console.log(`${name} ${start ? "switch" : "wide"}: ${JSON.stringify(m)}`);
         expect(m.firstTeleSec).not.toBeNull();
+        expect(m.centredTeleSec).toBeGreaterThan(10);
+        expect(m.inFrame).toBeGreaterThan(0.9);
       }, 120_000);
     }
   }

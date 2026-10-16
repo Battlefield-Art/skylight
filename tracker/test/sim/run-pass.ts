@@ -77,7 +77,7 @@ export function baseTracker(over: Partial<TrackerConfig> = {}): TrackerConfig {
     ...(PI as unknown as Partial<TrackerConfig>),
     driver: "visca",
     // no video in the sim: framing from ADS-B only
-    vision: { ...t.vision, ...(PI.vision as object), lockWide: false, applyCorrection: false },
+    vision: { ...t.vision, ...(PI.vision as Partial<TrackerConfig["vision"]>), lockWide: false, applyCorrection: false },
     home: { ...t.home, enabled: false },
     ...over,
   } as TrackerConfig;
@@ -140,15 +140,12 @@ export async function runPass(
   const { ControlLoop } = await import("../../src/loop.js");
   if (opts.vision) vi.doUnmock("../../src/vision/detect.js");
   const trackerCfg: TrackerConfig = opts.vision
-    ? { ...tracker, vision: { ...tracker.vision, ...(PI.vision as object), autoCalibrate: false } }
+    ? { ...tracker, vision: { ...tracker.vision, ...(PI.vision as Partial<TrackerConfig["vision"]>), autoCalibrate: false } }
     : tracker;
   const cfg: Config = { ...DEFAULT_CONFIG, tracker: { ...trackerCfg, camera: profile ?? tracker.camera } };
   const sim = new FakeViscaHead(cfg.tracker.camera, cfg.tracker.units, cfg.tracker.limits, head);
   if (opts.start) {
-    const h = sim as unknown as { panDeg: number; tiltDeg: number; zoom: number; zoomGoal: number };
-    h.panDeg = opts.start.panDeg ?? h.panDeg;
-    h.tiltDeg = opts.start.tiltDeg ?? h.tiltDeg;
-    if (opts.start.zoomUnits != null) h.zoom = h.zoomGoal = opts.start.zoomUnits;
+    sim.place(opts.start);
   }
   const oracle = opts.vision
     ? new OracleCamera(cfg.tracker.mount, {
@@ -227,9 +224,10 @@ export async function runPass(
     }
     const truth = azElFromSite(site, predictGeo(kin, (Date.now() - t0) / 1000));
     const axis = worldFromMount({ panDeg: sim.panDeg, tiltDeg: sim.tiltDeg }, cfg.tracker.mount);
-    opts.onSample?.({ tSec: ms / 1000, axis, truth, hfov: hfovAt(cfg.tracker, sim.zoom), state: opts.onSample ? loop.getState() : null });
+    const hfovNow = hfovAt(cfg.tracker, sim.zoom);
+    const state = opts.onSample || oracle ? loop.getState() : null;
+    opts.onSample?.({ tSec: ms / 1000, axis, truth, hfov: hfovNow, state });
     if (oracle) {
-      const hfovNow = hfovAt(cfg.tracker, sim.zoom);
       oracle.record({
         t: Date.now(), panDeg: sim.panDeg, tiltDeg: sim.tiltDeg, hfovDeg: hfovNow,
         truthAz: truth.azDeg, truthEl: truth.elDeg, slantM: truth.slantM,
@@ -239,7 +237,7 @@ export async function runPass(
         centredTele += DT / 1000;
         if (firstTeleSec == null) firstTeleSec = ms / 1000;
       }
-      const why = (loop.getState()?.target.zoomWhy ?? "").replace(/\+held$/, "");
+      const why = (state?.target.zoomWhy ?? "").replace(/\+held$/, "");
       if (why && !zoomWhy.includes(why)) zoomWhy.push(why);
     }
     // Reversals: the lens turns around after travelling more than ~one stop.
@@ -249,8 +247,7 @@ export async function runPass(
       if (dir !== 0) {
         if (zoomDir !== 0 && dir !== zoomDir) {
           zoomReversals++;
-          const hf = hfovAt(cfg.tracker, sim.zoom);
-          if (angularSepDeg(axis.azDeg, axis.elDeg, truth.azDeg, truth.elDeg) < hf * (9 / 16) / 2) zoomReversalsVisible++;
+          if (angularSepDeg(axis.azDeg, axis.elDeg, truth.azDeg, truth.elDeg) < hfovNow * (9 / 16) / 2) zoomReversalsVisible++;
         }
         zoomDir = dir;
         zoomPivot = sim.zoom;
@@ -268,10 +265,9 @@ export async function runPass(
       if (v2 > 0.25) along.push((ox * vx + oy * vy) / v2);
     }
     const err = angularSepDeg(axis.azDeg, axis.elDeg, truth.azDeg, truth.elDeg);
-    const hfov = hfovAt(cfg.tracker, sim.zoom);
     errs.push(err);
-    frac.push(err / hfov);
-    if (err < hfov / 2 * 0.9) inFrame++;
+    frac.push(err / hfovNow);
+    if (err < hfovNow / 2 * 0.9) inFrame++;
   }
   loop.stop();
   const zoomCmds = sim.zoomCmds;

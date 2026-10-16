@@ -8,12 +8,11 @@
 // RUN ON THE PI with skylight-tracker STOPPED (one VISCA client only):
 //   cd ~/skylight/tracker && pnpm exec tsx scripts/probe-tilt-slip.ts <outdir> [refPan] [refTilt] [cycles] [pulses] [slowGearSec]
 
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadTrackerConfig } from "./lib/camera-config.js";
 import {
-  CAM, closeVisca, drive, gotoAbs, openVisca, readStillPose, setZoom, settleAt, sleep, stopMotion,
+  CAM, closeVisca, drive, gotoAbs, grabFrame, openVisca, readStillPose, setZoom, settleAt, sleep, stopMotion,
 } from "./lib/visca-probe.js";
 
 const OUT = process.argv[2] ?? "/tmp/slip";
@@ -22,13 +21,10 @@ const REF_TILT = Number(process.argv[4] ?? -15);
 const CYCLES = Number(process.argv[5] ?? 5);
 const PULSES = Number(process.argv[6] ?? 60);
 const SLOW_SEC = Number(process.argv[7] ?? 0);
-const lim = loadTrackerConfig().limits;
+const cfg = loadTrackerConfig();
+const lim = cfg.limits;
 const TILT_HI = Math.min(lim.tiltMaxDeg - 10, 60);
 
-function grab(file: string): void {
-  execFileSync("ffmpeg", ["-loglevel", "error", "-rtsp_transport", "tcp", "-y", "-i", CAM.rtspMain,
-    "-frames:v", "1", "-q:v", "3", file], { timeout: 20000 });
-}
 
 /** Back to the reference pose SLOWLY (a slow move can't slip), then a frame. */
 async function reference(name: string, log: Record<string, unknown>[]): Promise<void> {
@@ -37,7 +33,7 @@ async function reference(name: string, log: Record<string, unknown>[]): Promise<
   await settleAt(REF_PAN, REF_TILT, 0.2);
   await sleep(800);
   const pose = await readStillPose();
-  grab(join(OUT, `${name}.jpg`));
+  grabFrame(join(OUT, `${name}.jpg`));
   log.push({ name, pose, t: Date.now() });
   console.log(`  ${name}: pose ${pose.panDeg.toFixed(2)}/${pose.tiltDeg.toFixed(2)}`);
 }
@@ -71,9 +67,9 @@ async function main(): Promise<void> {
 
   // Tilt detent stepper pulses (profile.tiltStepper: one short low-speed
   // pulse per detent, used for slow tilt at tele): N up, then N down.
-  const st = loadTrackerConfig().camera.tiltStepper;
+  const st = cfg.camera.tiltStepper;
   if (st) {
-    const zoomTele = Math.max(st.minZoomUnits ?? 900, 1200);
+    const zoomTele = Math.max(st.minZoomUnits ?? 0, cfg.units.zoomTeleUnits);
     for (const [label, dir] of [["up", 0x01], ["down", 0x02]] as const) {
       if (dir === 0x02) {
         // start the descent high enough that N detents down end at the reference
@@ -96,7 +92,7 @@ async function main(): Promise<void> {
   // The slowest gear (byte 0, ~1.5°/s at every zoom) against the wedge's
   // gravity load: the loop uses it constantly at tele. N s up, N s down.
   if (SLOW_SEC > 0) {
-    setZoom(1385);
+    setZoom(cfg.units.zoomTeleUnits);
     await sleep(3000);
     drive(1, 0x03, 0x00, 0x01); await sleep(SLOW_SEC * 1000); stopMotion(); await sleep(500);
     drive(1, 0x03, 0x00, 0x02); await sleep(SLOW_SEC * 1000); stopMotion(); await sleep(500);
