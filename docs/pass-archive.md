@@ -100,7 +100,7 @@ Sent by the Pi as `POST /ingest/<id>`; stored verbatim in D1 `meta`; returned by
     "planeSizeFrac": 0.21,             // plane width as a fraction of the frame width in the best frame
     "centredSec": 12.4,                // seconds the plane sat inside the central 50% of the frame
     "bestFrameSec": 23.8,              // CLIP time of the beauty shot (= poster frame)
-    "flags": [],                       // any of: soft-focus no-plane short lost-lock jumpy wrap-pinned low-zoom lens-stuck
+    "flags": [],                       // any of: soft-focus no-plane short lost-lock jumpy wrap-pinned low-zoom lens-stuck clip-short
     "method": "q1"
   },
   "events": [                          // seconds from startedAt, sorted
