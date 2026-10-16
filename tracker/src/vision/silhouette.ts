@@ -18,6 +18,8 @@ export interface Silhouette {
  * dimension is about `sizePx` pixels. Background = median of the search
  * window's border ring; foreground = pixels deviating from it by more than
  * a robust threshold; the connected component nearest the seed wins.
+ * `reachPx` widens the search to the seed's own uncertainty: a seed from the
+ * pointing model (not from a detection) is routinely 0.2-0.8° off the plane.
  * Returns null when nothing plausible is found (caller keeps the blob).
  */
 export function silhouetteCentroid(
@@ -27,8 +29,9 @@ export function silhouetteCentroid(
   cx: number,
   cy: number,
   sizePx: number,
+  reachPx = 0,
 ): Silhouette | null {
-  const R = Math.round(Math.min(100, Math.max(20, 2 * sizePx)));
+  const R = Math.round(Math.min(100, Math.max(20, 2 * sizePx, reachPx + sizePx)));
   const sx = Math.round(cx * w);
   const sy = Math.round(cy * h);
   const x0 = Math.max(0, sx - R), x1 = Math.min(w - 1, sx + R);
@@ -102,7 +105,7 @@ export function silhouetteCentroid(
   const big = comps.filter((c) => c.n >= 6);
   if (!big.length) return null;
   const best = big.reduce((a, b) => (dist(a) - Math.sqrt(a.n) < dist(b) - Math.sqrt(b.n) ? a : b));
-  if (dist(best) > 0.5 * sizePx + 4) return null;
+  if (dist(best) > Math.max(0.5 * sizePx + 4, reachPx)) return null;
   // Merge islands within reach of the winner's box.
   const reach = 0.3 * sizePx + 3;
   const parts = big.filter((c) =>

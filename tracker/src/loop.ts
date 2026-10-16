@@ -167,6 +167,9 @@ const DET_HOP_FRAC = 0.08;
 /** Expected plane size (vision px, 480 wide) above which detections are
  *  re-centred on the whole silhouette (vision/silhouette.ts). */
 const SILHOUETTE_MIN_PX = 14;
+/** How far from the expected spot the static-silhouette fallback looks (deg):
+ *  the pointing model's error while the lock is lost. */
+const SILHOUETTE_REACH_DEG = 0.8;
 /** Zoom debounce: how long a tighter / wider framing want must persist. */
 const ZOOM_IN_HOLD_MS = 600;
 const ZOOM_OUT_HOLD_MS = 600;
@@ -2294,7 +2297,11 @@ export class ControlLoop {
         if (hfov < 20 && (predicted || lockedBefore)) {
           const near = cands.some((c) => Math.hypot((c.cx - exX) * VISION_W, (c.cy - exY) * VISION_H) < 30);
           if (!near) {
-            const sil = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx));
+            // The expected spot is the pointing model's, not a detection: on real
+            // tele gaps the plane sat 0.2-0.8° from it, and a reach of a few px
+            // found 6 of the 19 visible planes this one finds (2026-10-15 clip frames).
+            const reachPx = Math.min(100, (SILHOUETTE_REACH_DEG / Math.max(1, hfov)) * VISION_W);
+            const sil = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx), reachPx);
             silTried = true;
             if (sil && sil.areaPx >= 4) {
               silFound = true;

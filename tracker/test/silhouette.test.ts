@@ -24,6 +24,16 @@ describe("silhouetteCentroid", () => {
     }
   });
 
+  it("finds a plane 0.5° off a pointing-model seed only with the reach", () => {
+    // Full tele (3.4° frame): a 20 px plane 70 px (0.5°) from the seed.
+    const l = scene(310, 140, 20);
+    expect(silhouetteCentroid(l, W, H, 240 / W, 140 / H, 20)).toBeNull();
+    const s = silhouetteCentroid(l, W, H, 240 / W, 140 / H, 20, 100)!;
+    expect(s).not.toBeNull();
+    expect(Math.abs(s.cx * W - 310)).toBeLessThan(3);
+    expect(silhouetteCentroid(new Uint8Array(W * H).fill(160), W, H, 0.5, 0.5, 20, 100)).toBeNull();
+  });
+
   it("returns null on empty sky", () => {
     const l = new Uint8Array(W * H).fill(160);
     expect(silhouetteCentroid(l, W, H, 0.5, 0.5, 40)).toBeNull();
