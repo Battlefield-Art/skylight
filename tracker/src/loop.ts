@@ -151,6 +151,19 @@ const BIAS_OUTLIER_FRAMES = 3;
  */
 const CORR_BLEED_TAU_S = 4;
 /**
+ * Mount prior: the last pass's median correction (head frame) is the best
+ * estimate of the mount model's CURRENT error, so a new target starts its
+ * correction there instead of at zero, and a lost lock bleeds back to it.
+ * The head's tilt zero creeps ~5°/h on this camera (2026-10-16 ring: +7.35°
+ * in 95 min, uniform at every pan) and the 3-pass fold lags it by ~2° — the
+ * tele frame is 3.4° tall, so every new target started near or past the
+ * frame edge. Dropped when older than this, larger than CORR_PRIOR_MAX_DEG,
+ * or from a pass whose corrections scatter (a wrong lock).
+ */
+const CORR_PRIOR_MAX_AGE_MS = 30 * 60_000;
+const CORR_PRIOR_MAX_DEG = 2.5;
+const CORR_PRIOR_MAX_IQR_DEG = 0.8;
+/**
  * Pan dead-zone anticipation. The head covers ±175°; a plane whose azimuth
  * crosses the 10° gap behind it (world az ≈ north here) forces a full
  * unwind. Chasing it to the stop and unwinding only after the command flips
@@ -884,6 +897,26 @@ export class ControlLoop {
   private lastFoldEl: { sign: number; t: number } | null = null;
   /** Recent passes' median corrections, newest last. */
   private biasHistory: { az: number; el: number; t: number }[] = [];
+  /** Mount prior (CORR_PRIOR_*): head-frame correction and the offsets it was
+   *  measured against — a later model change absorbs part of it. */
+  private mountPrior: { az: number; el: number; panOff: number; tiltOff: number; t: number } | null = null;
+  /** The next tick with a prediction seeds the correction from the prior. */
+  private seedCorrFromPrior = false;
+
+  /** The mount prior as a WORLD correction at (az, el), or null. */
+  private priorWorldCorr(azDeg: number, elDeg: number, now: number): { az: number; el: number } | null {
+    const p = this.mountPrior;
+    if (!p || now - p.t > CORR_PRIOR_MAX_AGE_MS) return null;
+    const m = this.cfg().mount;
+    // Head-frame correction c is absorbed by offsets −c (the fold's rule), so
+    // what is left after the offsets moved by Δ is c + Δ.
+    const dAz = p.az + norm180(m.panOffsetDeg - p.panOff);
+    const dEl = p.el + (m.tiltOffsetDeg - p.tiltOff);
+    if (Math.hypot(dAz, dEl) > CORR_PRIOR_MAX_DEG) return null;
+    const h = mountFrameFromWorld(azDeg, elDeg, m);
+    const w = worldFromMountFrame(h.azDeg + dAz, h.elDeg + dEl, m);
+    return { az: norm180(w.azDeg - azDeg), el: w.elDeg - elDeg };
+  }
 
   /**
    * Drift fold-in. The per-pass vision bias IS the mount-model error where
@@ -915,7 +948,20 @@ export class ControlLoop {
       const v = [...xs].sort((p, q) => p - q);
       return v[v.length >> 1];
     };
-    this.biasHistory.push({ az: med(b.map((x) => x.az)), el: med(b.map((x) => x.el)), t: now });
+    const iqr = (xs: number[]) => {
+      const v = [...xs].sort((p, q) => p - q);
+      return v[Math.floor(v.length * 0.75)] - v[Math.floor(v.length * 0.25)];
+    };
+    const pAz = med(b.map((x) => x.az));
+    const pEl = med(b.map((x) => x.el));
+    if (
+      Math.hypot(pAz, pEl) <= CORR_PRIOR_MAX_DEG &&
+      Math.max(iqr(b.map((x) => x.az)), iqr(b.map((x) => x.el))) <= CORR_PRIOR_MAX_IQR_DEG
+    ) {
+      const m0 = this.cfg().mount;
+      this.mountPrior = { az: pAz, el: pEl, panOff: m0.panOffsetDeg, tiltOff: m0.tiltOffsetDeg, t: now };
+    }
+    this.biasHistory.push({ az: pAz, el: pEl, t: now });
     this.biasHistory = this.biasHistory.filter((h) => now - h.t < 45 * 60_000).slice(-6);
     const last = this.biasHistory.slice(-BIAS_FOLD_PASSES);
     if (last.length < BIAS_FOLD_PASSES) return;
@@ -955,7 +1001,8 @@ export class ControlLoop {
     this.elTracker.reset();
     this.lastObservedTs = 0;
     // Vision state is target-specific — a stale lock or correction from the
-    // previous plane must not smear onto the new one.
+    // previous plane must not smear onto the new one. Only the mount prior
+    // (a whole pass's median, head frame) carries over: seeded next tick.
     this.lastDetection = null;
     this.tracks.reset();
     this.prevLuma = null;
@@ -965,6 +1012,7 @@ export class ControlLoop {
     this.corrEl = 0;
     this.corrAzApp = 0;
     this.corrElApp = 0;
+    this.seedCorrFromPrior = true;
     this.visionGoodSince = 0;
     this.visionBadSince = 0;
     this.wasHold = false;
@@ -1094,6 +1142,21 @@ export class ControlLoop {
         cfg.mount, cfg.limits, curPT,
       );
       if (prediction && predAzLead) azLeadPred = predAzLead;
+      if (prediction && this.seedCorrFromPrior) {
+        this.seedCorrFromPrior = false;
+        const c = cfg.vision.applyCorrection
+          ? this.priorWorldCorr(prediction.nowAzEl.azDeg, prediction.nowAzEl.elDeg, now)
+          : null;
+        if (c) {
+          const cosE = Math.max(0.2, Math.cos((prediction.nowAzEl.elDeg * Math.PI) / 180));
+          this.corrAzX = c.az * cosE;
+          this.corrAz = c.az;
+          this.corrEl = c.el;
+          this.corrAzApp = c.az;
+          this.corrElApp = c.el;
+          this.recorder.write("corrSeed", { az: c.az, el: c.el });
+        }
+      }
     }
 
     if (prediction && targetAc) {
@@ -2624,10 +2687,15 @@ export class ControlLoop {
         // ADS-B offset has not changed: HOLD the correction. Only once the
         // track is gone does it bleed, slowly (CORR_BLEED_TAU_S).
         if (!lt) {
+          // Toward the mount prior, not zero: zero is the model, which lags
+          // a creeping tilt zero (CORR_PRIOR_*).
           const k = Math.exp(-dtFrame / CORR_BLEED_TAU_S);
-          this.corrAz *= k;
-          this.corrAzX *= k;
-          this.corrEl *= k;
+          const pr = predicted ? this.priorWorldCorr(predicted.azDeg, predicted.elDeg, now) : null;
+          const cosP = predicted ? Math.max(0.2, Math.cos((predicted.elDeg * Math.PI) / 180)) : 1;
+          const pAzX = pr ? pr.az * cosP : 0;
+          this.corrAzX = pAzX + (this.corrAzX - pAzX) * k;
+          this.corrAz = this.corrAzX / cosP;
+          this.corrEl = (pr?.el ?? 0) + (this.corrEl - (pr?.el ?? 0)) * k;
           this.visionGoodSince = 0;
           if (!this.visionBadSince) this.visionBadSince = now;
         }
