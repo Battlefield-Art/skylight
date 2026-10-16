@@ -192,6 +192,10 @@ export class PassUploader {
         await writeFile(join(this.passesDir, id, ".failed"), `${msg}\n`).catch(() => {});
         console.error(`[passes] upload of ${id} rejected, parked as .failed: ${msg}`);
       } else {
+        // To the back of the line: a pass that fails on its own (one big clip
+        // the archive can't take yet) must not hold up the passes behind it.
+        // A real outage fails them all, and the backoff still applies.
+        this.queue.push(this.queue.shift()!);
         this.failures++;
         delay = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** (this.failures - 1));
         console.error(`[passes] upload of ${id} failed (${msg}); retry in ${Math.round(delay / 1000)}s`);

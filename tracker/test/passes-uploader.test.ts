@@ -125,6 +125,23 @@ describe("PassUploader", () => {
     expect(delays).toContain(BACKOFF_MIN_MS);
   });
 
+  it("a pass failing on its own goes to the back of the line, not in front of the rest", async () => {
+    await makePass(root, "20261010T000000Z-big000");
+    await makePass(root, "20261010T000100Z-next00");
+    const calls: Call[] = [];
+    const up = new PassUploader(root, {
+      key: "k",
+      // The first pass's first PUT fails transiently (the archive can't take it yet).
+      fetchImpl: fakeFetch(calls, [() => new Response("not found", { status: 404 })]),
+      setTimer: immediate,
+    });
+    await up.enqueue("20261010T000000Z-big000");
+    await up.enqueue("20261010T000100Z-next00");
+    await until(() => existsSync(join(root, "20261010T000000Z-big000", ".uploaded")));
+    const posts = calls.filter((c) => c.method === "POST").map((c) => c.url.split("/").pop());
+    expect(posts).toEqual(["20261010T000100Z-next00", "20261010T000000Z-big000"]);
+  });
+
   it("parks a permanently rejected pass as .failed and moves on", async () => {
     await makePass(root, "20261010T000000Z-bad000");
     await makePass(root, "20261010T000100Z-good00");
