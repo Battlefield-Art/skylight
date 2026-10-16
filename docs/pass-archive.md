@@ -113,6 +113,7 @@ Sent by the Pi as `POST /ingest/<id>`; stored verbatim in D1 `meta`; returned by
     { "t": 34.0, "kind": "focus",   "label": "One-push autofocus" },
     { "t": 43.0, "kind": "release", "label": "Target released" }
   ],
+  "experiment": { "name": "mountPrior", "arm": "B" }, // optional: interleaved A/B test (arm A = control)
   "notes": []                          // reserved for human/AI commentary (strings)
 }
 ```

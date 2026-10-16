@@ -901,6 +901,15 @@ export class ControlLoop {
   private mountPrior: { az: number; el: number; panOff: number; tiltOff: number; t: number } | null = null;
   /** The next tick with a prediction seeds the correction from the prior. */
   private seedCorrFromPrior = false;
+  /** Interleaved A/B (config `experiment`): this target's arm, and a counter
+   *  so consecutive targets alternate. */
+  private abArm: { name: string; arm: "A" | "B" } | null = null;
+  private abCount = 0;
+
+  /** True when experiment `name` runs and this target is its control (arm A). */
+  private abControl(name: string): boolean {
+    return this.abArm?.name === name && this.abArm.arm === "A";
+  }
 
   /** The mount prior as a WORLD correction at (az, el), or null. */
   private priorWorldCorr(azDeg: number, elDeg: number, now: number): { az: number; el: number } | null {
@@ -1104,6 +1113,9 @@ export class ControlLoop {
         this.foldPassBias(now);
         this.foldLead(now);
         this.current = hex ? { hex, sinceMs: now } : null;
+        this.abArm = hex && cfg.experiment
+          ? { name: cfg.experiment, arm: this.abCount++ % 2 === 0 ? "A" : "B" }
+          : null;
         this.resetSetpoint();
         this.recorder.write("target", { hex });
         this.emit({ kind: "target", t: now, hex: hex ?? null });
@@ -1143,7 +1155,7 @@ export class ControlLoop {
       if (prediction && predAzLead) azLeadPred = predAzLead;
       if (prediction && this.seedCorrFromPrior) {
         this.seedCorrFromPrior = false;
-        const c = cfg.vision.applyCorrection
+        const c = cfg.vision.applyCorrection && !this.abControl("mountPrior")
           ? this.priorWorldCorr(prediction.nowAzEl.azDeg, prediction.nowAzEl.elDeg, now)
           : null;
         if (c) {
@@ -2110,6 +2122,7 @@ export class ControlLoop {
         hfovDeg,
         angularSizeDeg,
         zoomWhy: this.current ? this.zoomWhy : undefined,
+        experiment: this.current && this.abArm ? this.abArm : undefined,
       },
       candidates,
       calibration: this.calibration.state(cfg.site, now),
@@ -2695,7 +2708,9 @@ export class ControlLoop {
           // Toward the mount prior, not zero: zero is the model, which lags
           // a creeping tilt zero (CORR_PRIOR_*).
           const k = Math.exp(-dtFrame / CORR_BLEED_TAU_S);
-          const pr = predicted ? this.priorWorldCorr(predicted.azDeg, predicted.elDeg, now) : null;
+          const pr = predicted && !this.abControl("mountPrior")
+            ? this.priorWorldCorr(predicted.azDeg, predicted.elDeg, now)
+            : null;
           const cosP = predicted ? Math.max(0.2, Math.cos((predicted.elDeg * Math.PI) / 180)) : 1;
           const pAzX = pr ? pr.az * cosP : 0;
           this.corrAzX = pAzX + (this.corrAzX - pAzX) * k;
