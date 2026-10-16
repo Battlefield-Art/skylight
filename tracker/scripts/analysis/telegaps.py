@@ -8,7 +8,8 @@ poses=[]; recs=[]
 for f in sys.argv[1:]:
     for line in open(f):
         if '"kind":"pose"' in line:
-            o=json.loads(line); poses.append((o['t'],o['pose']['panDeg']))
+            o=json.loads(line)
+            if o.get('pose'): poses.append((o['t'],o['pose']['panDeg']))
         elif '"visionMiss"' in line or '"kind":"vision"' in line or '"kind":"target"' in line:
             recs.append(json.loads(line))
 poses.sort(); pt=[p[0] for p in poses]
