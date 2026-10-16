@@ -124,9 +124,15 @@ export function silhouetteCentroid(
   const ext = Math.max(maxX - minX + 1, maxY - minY + 1);
   if (ext > 2.5 * sizePx + 10) return null;
   if (n > 0.5 * ext * ext) return null;
+  const touches = minX === 0 || minY === 0 || maxX === ww - 1 || maxY === wh - 1;
+  // A wide search (reachPx) has no detection behind its seed, so it takes only
+  // a whole, plane-like island: live 2026-10-16 it locked a power line across
+  // the view (a thin line covers ~2% of its bounding square; a plane, even
+  // side-on, ≥ 10%) and haze at the frame's bottom edge.
+  if (reachPx > 0 && (touches || n < 0.05 * ext * ext)) return null;
   // Touching the window edge = background flood or a plane bigger than the
   // window; either way the centroid would be wrong.
-  if (minX === 0 || minY === 0 || maxX === ww - 1 || maxY === wh - 1) {
+  if (touches) {
     const atFrameEdge =
       (minX === 0 && x0 === 0) || (minY === 0 && y0 === 0) ||
       (maxX === ww - 1 && x1 === w - 1) || (maxY === wh - 1 && y1 === h - 1);

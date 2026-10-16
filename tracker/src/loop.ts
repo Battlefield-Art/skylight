@@ -180,6 +180,8 @@ const DET_HOP_FRAC = 0.08;
 /** Expected plane size (vision px, 480 wide) above which detections are
  *  re-centred on the whole silhouette (vision/silhouette.ts). */
 const SILHOUETTE_MIN_PX = 14;
+/** Shadow-mode reach of the static-silhouette fallback (deg), see silWide. */
+const SILHOUETTE_SHADOW_REACH_DEG = 0.8;
 /** Zoom debounce: how long a tighter / wider framing want must persist. */
 const ZOOM_IN_HOLD_MS = 600;
 const ZOOM_OUT_HOLD_MS = 600;
@@ -2291,6 +2293,7 @@ export class ControlLoop {
       let cands: Detection[] = [];
       let silTried = false;
       let silFound = false;
+      let silWide: { cx: number; cy: number; areaPx: number; box: Detection["box"] } | null = null;
       const prev = this.prevLuma;
       const prevAim = this.prevAim;
       if (prev && prevAim && prev.length === cur.length) {
@@ -2365,6 +2368,15 @@ export class ControlLoop {
                 cx: sil.cx, cy: sil.cy, areaPx: sil.areaPx, contrastSigma: 6,
                 box: sil.box, score: 6,
               });
+            } else {
+              // Shadow only (recorded, never steers): the same search over the
+              // pointing model's error. A 0.8° reach found most of the visible
+              // planes the tight one missed on clip frames, but live it also
+              // locked a power line (build 16b); it gets to steer once its
+              // recorded finds check out against the clips.
+              const reachPx = Math.min(100, (SILHOUETTE_SHADOW_REACH_DEG / Math.max(1, hfov)) * VISION_W);
+              const w = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx), reachPx);
+              if (w && w.areaPx >= 4) silWide = { cx: w.cx, cy: w.cy, areaPx: w.areaPx, box: w.box };
             }
           }
         }
@@ -2470,7 +2482,7 @@ export class ControlLoop {
           (m, c) => Math.min(m, Math.hypot((c.cx - exX) * VISION_W, (c.cy - exY) * VISION_H)), Infinity);
         this.recorder.write("visionMiss", {
           hfov: hfovF, exX, exY, nCands: cands.length, nearPx: Number.isFinite(near) ? near : null,
-          silTried, silFound, aimRateDps,
+          silTried, silFound, silWide, aimRateDps,
           sel: sel ? {
             hits: sel.track.hits, ageMs: frameT - sel.track.lastSeen, eligible: sel.eligible,
             velErrDps: sel.velErrDps, posErrDeg: sel.posErrDeg, motionOk: sel.motionOk,

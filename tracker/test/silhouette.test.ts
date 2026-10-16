@@ -34,6 +34,15 @@ describe("silhouetteCentroid", () => {
     expect(silhouetteCentroid(new Uint8Array(W * H).fill(160), W, H, 0.5, 0.5, 20, 100)).toBeNull();
   });
 
+  it("a wide search does not take a wire crossing the view", () => {
+    const l = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const wire = Math.abs(y - (60 + 0.4 * x)) < 1.2;
+      l[y * W + x] = wire ? 70 : 150 + y * 0.1;
+    }
+    expect(silhouetteCentroid(l, W, H, 240 / W, 130 / H, 20, 100)).toBeNull();
+  });
+
   it("returns null on empty sky", () => {
     const l = new Uint8Array(W * H).fill(160);
     expect(silhouetteCentroid(l, W, H, 0.5, 0.5, 40)).toBeNull();
