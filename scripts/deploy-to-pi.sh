@@ -44,7 +44,12 @@ $SSH "$PI_USER@$PI_HOST" "
     -e \"s#__PNPM__#\$PNPM_BIN#g\" \
     '$PI_APPDIR/pi-setup/skylight-tracker.service' \
     | sudo tee /etc/systemd/system/skylight-tracker.service >/dev/null
+  # Exposure compensation by sun elevation (TONGVEO web API), every 5 min.
+  sudo sed -e \"s#__USER__#\$(id -un)#g\" -e \"s#__APPDIR__#$PI_APPDIR#g\" \
+    '$PI_APPDIR/pi-setup/skylight-exposure.service' | sudo tee /etc/systemd/system/skylight-exposure.service >/dev/null
+  sudo cp '$PI_APPDIR/pi-setup/skylight-exposure.timer' /etc/systemd/system/
   sudo systemctl daemon-reload
+  sudo systemctl enable --now skylight-exposure.timer >/dev/null 2>&1 || true
   sudo systemctl enable skylight-tracker.service >/dev/null 2>&1 || true
   sudo systemctl restart $SERVICE
   sudo systemctl restart skylight-tracker.service
