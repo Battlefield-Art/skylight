@@ -30,6 +30,9 @@ export function silhouetteCentroid(
   cy: number,
   sizePx: number,
   reachPx = 0,
+  /** Optional sky mask (non-zero = above the skyline): ground clutter (roofs,
+   *  trees, the power line by the tree) is neither background nor plane. */
+  sky?: Uint8Array,
 ): Silhouette | null {
   const R = Math.round(Math.min(100, Math.max(20, 2 * sizePx, reachPx + sizePx)));
   const sx = Math.round(cx * w);
@@ -46,10 +49,12 @@ export function silhouetteCentroid(
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       if (x - x0 < 3 || x1 - x < 3 || y - y0 < 3 || y1 - y < 3) {
+        if (sky && !sky[y * w + x]) continue;
         rx.push(x - sx); ry.push(y - sy); rv.push(luma[y * w + x]);
       }
     }
   }
+  if (rv.length < 24) return null; // the window's border is mostly ground
   const bg = fitQuadric(rx, ry, rv, R);
   const res = rv.map((v, i) => Math.abs(v - bg(rx[i], ry[i]))).sort((a, b) => a - b);
   const mad = res[res.length >> 1];
@@ -59,6 +64,7 @@ export function silhouetteCentroid(
   for (let y = 0; y < wh; y++) {
     for (let x = 0; x < ww; x++) {
       const X = x + x0, Y = y + y0;
+      if (sky && !sky[Y * w + X]) continue;
       const b = bg(X - sx, Y - sy);
       if (Math.abs(luma[Y * w + X] - b) > thr) mask[y * ww + x] = 1;
     }

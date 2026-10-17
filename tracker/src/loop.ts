@@ -2391,7 +2391,10 @@ export class ControlLoop {
               // locked a power line (build 16b); it gets to steer once its
               // recorded finds check out against the clips.
               const reachPx = Math.min(100, (SILHOUETTE_SHADOW_REACH_DEG / Math.max(1, hfov)) * VISION_W);
-              const w = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx), reachPx);
+              const sky = new Uint8Array(VISION_W * VISION_H).fill(255);
+              maskBelowWorld(sky, VISION_W, VISION_H, geomNow,
+                hz?.length ? (az) => Math.max(-2, horizonMinEl(hz, az, -90)) : () => -2);
+              const w = silhouetteCentroid(cur, VISION_W, VISION_H, exX, exY, Math.max(8, thetaPx), reachPx, sky);
               if (w && w.areaPx >= 4) silWide = { cx: w.cx, cy: w.cy, areaPx: w.areaPx, box: w.box };
             }
           }
