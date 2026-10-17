@@ -23,7 +23,8 @@ STEPS = [
     (20.0, {"ExpComp": 3, "maxgain": 0, "maxshutter": 8}),   # high sun: -4
     (10.0, {"ExpComp": 5, "maxgain": 0, "maxshutter": 8}),   # low sun: -2
     (5.0, {"ExpComp": 7, "maxgain": 0, "maxshutter": 8}),    # neutral
-    (-90.0, {"ExpComp": 7, "maxgain": 40, "maxshutter": 9}), # dusk/night: gain allowed, 1/60 s
+    (-6.0, {"ExpComp": 7, "maxgain": 40, "maxshutter": 9}),  # dusk: gain allowed, 1/60 s
+    (-90.0, {"ExpComp": 7, "maxgain": 70, "maxshutter": 9}), # after civil twilight: sky ~4/255 at gain 40
 ]
 CONFIG_URL = os.environ.get("SKYLIGHT_CONFIG_URL", "http://localhost:3000/api/config")
 
