@@ -1117,8 +1117,9 @@ export class ControlLoop {
           ? { name: cfg.experiment, arm: this.abCount++ % 2 === 0 ? "A" : "B" }
           : null;
         this.resetSetpoint();
-        // Lock-first association: under test (arm B of experiment lockFirst).
-        this.tracks.lockFirst = this.abArm?.name === "lockFirst" && this.abArm.arm === "B";
+        // Lock-first association (tracks.ts): on, except as the control arm of a
+        // re-test. Interleaved A/B 2026-10-16 (64 passes): tele gap time 8.9% → 5.4%.
+        this.tracks.lockFirst = !this.abControl("lockFirst");
         this.recorder.write("target", { hex });
         this.emit({ kind: "target", t: now, hex: hex ?? null });
       }
